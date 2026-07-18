@@ -44,6 +44,14 @@ impl Tool for WebSearch {
     }
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Deserialize, JsonSchema)]
+struct Company {
+    name: String,
+    prefecture: String,
+    ceo_name: String,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
@@ -57,7 +65,15 @@ async fn main() -> anyhow::Result<()> {
     let out = agent
         .run(&Model::BedrockClaudeSonnet46, "現在の日本の総理大臣は誰？")
         .await?;
+    println!("[run] {:?}", out);
 
-    println!("{:?}", out);
+    let company = agent
+        .run_typed::<Company>(
+            &Model::BedrockClaudeSonnet46,
+            "トヨタ自動車の会社情報（会社名・本社の都道府県・代表者名）を調べて",
+        )
+        .await?;
+    println!("[run_typed] {:#?}", company);
+
     Ok(())
 }

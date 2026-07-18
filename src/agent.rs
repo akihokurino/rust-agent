@@ -23,130 +23,26 @@ impl Agent {
         AgentBuilder::default()
     }
 
-    pub async fn run(
+    async fn loop_call<O>(
         &self,
         model: &Model,
         message: &str,
-    ) -> Result<AgentResult<String>, AgentError> {
+        system: &str,
+        tool_refs: &[&dyn tool::Tool],
+        finish: impl Fn(&types::InvokeResult) -> Option<Result<O, AgentError>>,
+    ) -> Result<AgentResult<O>, AgentError> {
         let llm = self.providers.get(model).ok_or(Kind::ModelNotConfigured)?;
-        let mut history = vec![Message::user_text(message)];
-
-        let tool_refs: Vec<&dyn tool::Tool> = self.tools.iter().map(|t| t.as_ref()).collect();
-        let tool_map = self
-            .tools
+        let tool_map = tool_refs
             .iter()
             .map(|t| (t.name(), t))
             .collect::<HashMap<_, _>>();
-
-        let mut turns: u32 = 0;
-        let mut input_tokens: u32 = 0;
-        let mut output_tokens: u32 = 0;
-
-        loop {
-            if turns >= self.max_turns {
-                return Err(Kind::MaxTurnsExceeded.default());
-            }
-            turns += 1;
-
-            let tool_choice = ToolChoice::Auto;
-            let res = llm
-                .invoke(
-                    model,
-                    &self.system_prompt,
-                    self.max_tokens,
-                    &history,
-                    &tool_refs,
-                    &tool_choice,
-                )
-                .await?;
-
-            input_tokens += res.usage.input_tokens;
-            output_tokens += res.usage.output_tokens;
-
-            let is_tool_use = matches!(res.stop_reason, StopReason::ToolUse);
-            let tool_calls: Vec<(String, String, serde_json::Value)> = res
-                .content
-                .iter()
-                .filter_map(|b| match b {
-                    ResultBlock::ToolUse { id, name, input } if name != "respond" => {
-                        Some((id.clone(), name.clone(), input.clone()))
-                    }
-                    _ => None,
-                })
-                .collect();
-
-            if !is_tool_use {
-                let text = res
-                    .content
-                    .iter()
-                    .filter_map(|b| match b {
-                        ResultBlock::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("");
-                return Ok(AgentResult {
-                    content: text,
-                    input_tokens,
-                    output_tokens,
-                });
-            }
-
-            history.push(res.into());
-
-            let mut results = Vec::new();
-            for (id, name, input) in tool_calls {
-                let tool = tool_map.get(&name).ok_or(Kind::ToolNotFound.default())?;
-
-                let block = match tool.execute(input).await {
-                    Ok(v) => MessageBlock::ToolResult {
-                        tool_use_id: id,
-                        content: v.to_string(),
-                        is_error: false,
-                    },
-                    Err(e) => MessageBlock::ToolResult {
-                        tool_use_id: id,
-                        content: e.to_string(),
-                        is_error: true,
-                    },
-                };
-                results.push(block);
-            }
-
-            history.push(Message::user_tool_results(results));
-        }
-    }
-
-    pub async fn run_typed<T>(
-        &self,
-        model: &Model,
-        message: &str,
-    ) -> Result<AgentResult<T>, AgentError>
-    where
-        T: serde::de::DeserializeOwned + schemars::JsonSchema + Send + Sync + 'static,
-    {
-        let llm = self.providers.get(model).ok_or(Kind::ModelNotConfigured)?;
-
-        let respond = tool::RespondTool::<T>::new();
-        let mut tool_refs: Vec<&dyn tool::Tool> = self.tools.iter().map(|t| t.as_ref()).collect();
-        tool_refs.push(&respond);
-
-        let tool_map = self
-            .tools
-            .iter()
-            .map(|t| (t.name(), t))
-            .collect::<HashMap<_, _>>();
-
-        let system = format!(
-            "{}\n\n最終的な回答は必ず respond ツールを呼び出して返してください。",
-            self.system_prompt
-        );
 
         let mut history = vec![Message::user_text(message)];
         let mut turns: u32 = 0;
         let mut input_tokens: u32 = 0;
         let mut output_tokens: u32 = 0;
         let mut tool_choice = ToolChoice::Auto;
+        let has_respond = tool_map.contains_key("respond");
 
         loop {
             if turns >= self.max_turns {
@@ -157,10 +53,10 @@ impl Agent {
             let res = llm
                 .invoke(
                     model,
-                    &system,
+                    system,
                     self.max_tokens,
                     &history,
-                    &tool_refs,
+                    tool_refs,
                     &tool_choice,
                 )
                 .await?;
@@ -168,14 +64,8 @@ impl Agent {
             input_tokens += res.usage.input_tokens;
             output_tokens += res.usage.output_tokens;
 
-            let respond_input = res.content.iter().find_map(|b| match b {
-                ResultBlock::ToolUse { name, input, .. } if name == "respond" => {
-                    Some(input.clone())
-                }
-                _ => None,
-            });
-            if let Some(input) = respond_input {
-                let content: T = serde_json::from_value(input)?;
+            if let Some(result) = finish(&res) {
+                let content = result?;
                 return Ok(AgentResult {
                     content,
                     input_tokens,
@@ -196,7 +86,7 @@ impl Agent {
 
             history.push(res.into());
 
-            if tool_calls.is_empty() {
+            if tool_calls.is_empty() && has_respond {
                 tool_choice = ToolChoice::Tool("respond".into());
                 continue;
             }
@@ -219,8 +109,64 @@ impl Agent {
                 results.push(block);
             }
             history.push(Message::user_tool_results(results));
+
             tool_choice = ToolChoice::Auto;
         }
+    }
+
+    pub async fn run(
+        &self,
+        model: &Model,
+        message: &str,
+    ) -> Result<AgentResult<String>, AgentError> {
+        let tool_refs: Vec<&dyn tool::Tool> = self.tools.iter().map(|t| t.as_ref()).collect();
+
+        self.loop_call(model, message, &self.system_prompt, &tool_refs, |res| {
+            (!matches!(res.stop_reason, StopReason::ToolUse)).then(|| {
+                let text = res
+                    .content
+                    .iter()
+                    .filter_map(|b| match b {
+                        ResultBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("");
+                Ok(text)
+            })
+        })
+        .await
+    }
+
+    pub async fn run_typed<T>(
+        &self,
+        model: &Model,
+        message: &str,
+    ) -> Result<AgentResult<T>, AgentError>
+    where
+        T: serde::de::DeserializeOwned + schemars::JsonSchema + Send + Sync + 'static,
+    {
+        let respond = tool::RespondTool::<T>::new();
+        let mut tool_refs: Vec<&dyn tool::Tool> = self.tools.iter().map(|t| t.as_ref()).collect();
+        tool_refs.push(&respond);
+
+        let system = format!(
+            "{}\n\n最終的な回答は必ず respond ツールを呼び出して返してください。",
+            self.system_prompt
+        );
+
+        self.loop_call(model, message, &system, &tool_refs, |res| {
+            res.content
+                .iter()
+                .find_map(|b| match b {
+                    ResultBlock::ToolUse { name, input, .. } if name == "respond" => {
+                        Some(input.clone())
+                    }
+                    _ => None,
+                })
+                .map(|input| serde_json::from_value(input).map_err(Into::into))
+        })
+        .await
     }
 }
 

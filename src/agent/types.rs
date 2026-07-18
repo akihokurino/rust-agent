@@ -90,6 +90,7 @@ pub struct Usage {
     pub output_tokens: u32,
 }
 
+#[derive(Clone)]
 pub enum ToolChoice {
     Auto,
     Tool(String),
