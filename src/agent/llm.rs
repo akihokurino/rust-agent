@@ -7,8 +7,9 @@ pub trait LLM: Send + Sync {
     async fn invoke(
         &self,
         model: &Model,
-        messages: Vec<types::Message>,
+        system_prompt: &str,
         max_tokens: u32,
+        messages: Vec<types::Message>,
     ) -> Result<types::InvokeResult, AgentError>;
 }
 

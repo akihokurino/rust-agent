@@ -1,1 +1,1 @@
-mod bedrock;
+pub mod bedrock;

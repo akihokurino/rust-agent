@@ -37,12 +37,14 @@ impl LLM for Adapter {
     async fn invoke(
         &self,
         model: &Model,
-        messages: Vec<agent::llm::types::Message>,
+        system_prompt: &str,
         max_tokens: u32,
+        messages: Vec<agent::llm::types::Message>,
     ) -> Result<agent::llm::types::InvokeResult, AgentError> {
         let messages: Vec<types::Message> = messages.into_iter().map(Into::into).collect();
         let body = json!({
             "anthropic_version": "bedrock-2023-05-31",
+            "system": system_prompt,
             "max_tokens": max_tokens,
             "messages": messages,
         });
@@ -89,8 +91,9 @@ mod tests {
         let out = adapter
             .invoke(
                 &Model::BedrockClaudeSonnet46,
-                vec![agent::llm::types::Message::user_text("hello")],
+                "You are a helpful assistant.",
                 1024,
+                vec![agent::llm::types::Message::user_text("hello")],
             )
             .await?;
 
