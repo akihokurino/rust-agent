@@ -32,6 +32,44 @@ pub enum MessageBlock {
     },
 }
 
+impl From<types::Message> for Message {
+    fn from(m: types::Message) -> Self {
+        Message {
+            role: m.role.into(),
+            content: m.content.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<types::Role> for Role {
+    fn from(r: types::Role) -> Self {
+        match r {
+            types::Role::User => Role::User,
+            types::Role::Assistant => Role::Assistant,
+        }
+    }
+}
+
+impl From<types::MessageBlock> for MessageBlock {
+    fn from(b: types::MessageBlock) -> Self {
+        match b {
+            types::MessageBlock::Text { text } => MessageBlock::Text { text },
+            types::MessageBlock::ToolUse { id, name, input } => {
+                MessageBlock::ToolUse { id, name, input }
+            }
+            types::MessageBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            } => MessageBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct InvokeResponse {
     pub content: Vec<ContentBlock>,
@@ -104,44 +142,6 @@ impl From<Usage> for types::Usage {
         types::Usage {
             input_tokens: u.input_tokens,
             output_tokens: u.output_tokens,
-        }
-    }
-}
-
-impl From<types::Message> for Message {
-    fn from(m: types::Message) -> Self {
-        Message {
-            role: m.role.into(),
-            content: m.content.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<types::Role> for Role {
-    fn from(r: types::Role) -> Self {
-        match r {
-            types::Role::User => Role::User,
-            types::Role::Assistant => Role::Assistant,
-        }
-    }
-}
-
-impl From<types::MessageBlock> for MessageBlock {
-    fn from(b: types::MessageBlock) -> Self {
-        match b {
-            types::MessageBlock::Text { text } => MessageBlock::Text { text },
-            types::MessageBlock::ToolUse { id, name, input } => {
-                MessageBlock::ToolUse { id, name, input }
-            }
-            types::MessageBlock::ToolResult {
-                tool_use_id,
-                content,
-                is_error,
-            } => MessageBlock::ToolResult {
-                tool_use_id,
-                content,
-                is_error,
-            },
         }
     }
 }

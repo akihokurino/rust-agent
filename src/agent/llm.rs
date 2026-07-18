@@ -38,6 +38,14 @@ pub mod types {
             }
         }
     }
+    impl From<InvokeResult> for Message {
+        fn from(value: InvokeResult) -> Self {
+            Message {
+                role: Role::Assistant,
+                content: value.content.into_iter().map(Into::into).collect(),
+            }
+        }
+    }
 
     #[derive(Debug)]
     pub enum MessageBlock {
@@ -54,6 +62,16 @@ pub mod types {
             content: String,
             is_error: bool,
         },
+    }
+    impl From<ResultBlock> for MessageBlock {
+        fn from(value: ResultBlock) -> Self {
+            match value {
+                ResultBlock::Text { text } => MessageBlock::Text { text },
+                ResultBlock::ToolUse { id, name, input } => {
+                    MessageBlock::ToolUse { id, name, input }
+                }
+            }
+        }
     }
 
     #[derive(Debug)]
