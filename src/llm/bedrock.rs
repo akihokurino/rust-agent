@@ -1,8 +1,11 @@
 pub mod types;
 
+use crate::agent;
+use crate::agent::llm::LLM;
 use crate::llm::bedrock::types::InvokeResponse;
 use crate::types::errors::{AgentError, Kind};
 use crate::types::model::Model;
+use async_trait::async_trait;
 use aws_config::BehaviorVersion;
 use aws_sdk_bedrockruntime::config::http::HttpResponse;
 use aws_sdk_bedrockruntime::error::SdkError;
@@ -27,19 +30,21 @@ impl Adapter {
         let client = Client::new(&config);
         Self { client }
     }
+}
 
-    pub async fn invoke(
+#[async_trait]
+impl LLM for Adapter {
+    async fn invoke(
         &self,
         model: &Model,
-        message: &str,
+        messages: Vec<agent::llm::types::Message>,
         max_tokens: u32,
-    ) -> Result<InvokeResponse, AgentError> {
+    ) -> Result<agent::llm::types::InvokeResult, AgentError> {
+        let messages: Vec<types::Message> = messages.into_iter().map(Into::into).collect();
         let body = json!({
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": max_tokens,
-            "messages": [
-                { "role": "user", "content": message }
-            ]
+            "messages": messages,
         });
 
         let resp = self
@@ -53,7 +58,7 @@ impl Adapter {
             .await?;
 
         let out: InvokeResponse = serde_json::from_slice(resp.body().as_ref())?;
-        Ok(out)
+        Ok(out.into())
     }
 }
 
@@ -84,7 +89,7 @@ mod tests {
         let out = adapter
             .invoke(
                 &Model::BedrockClaudeSonnet46,
-                "こんにちは、一言で返して",
+                vec![agent::llm::types::Message::user_text("hello")],
                 1024,
             )
             .await?;

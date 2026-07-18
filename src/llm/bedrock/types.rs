@@ -1,4 +1,36 @@
-use serde::Deserialize;
+use crate::agent::llm::types;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize)]
+pub struct Message {
+    pub role: Role,
+    pub content: Vec<MessageBlock>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MessageBlock {
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    ToolResult {
+        tool_use_id: String,
+        content: String,
+        is_error: bool,
+    },
+}
 
 #[derive(Debug, Deserialize)]
 pub struct InvokeResponse {
@@ -33,4 +65,83 @@ pub enum StopReason {
 pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+}
+
+impl From<InvokeResponse> for types::InvokeResult {
+    fn from(r: InvokeResponse) -> Self {
+        types::InvokeResult {
+            content: r.content.into_iter().map(Into::into).collect(),
+            stop_reason: r.stop_reason.into(),
+            usage: r.usage.into(),
+        }
+    }
+}
+
+impl From<ContentBlock> for types::ResultBlock {
+    fn from(b: ContentBlock) -> Self {
+        match b {
+            ContentBlock::Text { text } => types::ResultBlock::Text { text },
+            ContentBlock::ToolUse { id, name, input } => {
+                types::ResultBlock::ToolUse { id, name, input }
+            }
+        }
+    }
+}
+
+impl From<StopReason> for types::StopReason {
+    fn from(s: StopReason) -> Self {
+        match s {
+            StopReason::EndTurn => types::StopReason::EndTurn,
+            StopReason::ToolUse => types::StopReason::ToolUse,
+            StopReason::MaxTokens => types::StopReason::MaxTokens,
+            StopReason::StopSequence => types::StopReason::StopSequence,
+        }
+    }
+}
+
+impl From<Usage> for types::Usage {
+    fn from(u: Usage) -> Self {
+        types::Usage {
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+        }
+    }
+}
+
+impl From<types::Message> for Message {
+    fn from(m: types::Message) -> Self {
+        Message {
+            role: m.role.into(),
+            content: m.content.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<types::Role> for Role {
+    fn from(r: types::Role) -> Self {
+        match r {
+            types::Role::User => Role::User,
+            types::Role::Assistant => Role::Assistant,
+        }
+    }
+}
+
+impl From<types::MessageBlock> for MessageBlock {
+    fn from(b: types::MessageBlock) -> Self {
+        match b {
+            types::MessageBlock::Text { text } => MessageBlock::Text { text },
+            types::MessageBlock::ToolUse { id, name, input } => {
+                MessageBlock::ToolUse { id, name, input }
+            }
+            types::MessageBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            } => MessageBlock::ToolResult {
+                tool_use_id,
+                content,
+                is_error,
+            },
+        }
+    }
 }
