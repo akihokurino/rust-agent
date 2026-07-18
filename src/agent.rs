@@ -31,7 +31,7 @@ impl Agent {
         tool_refs: &[&dyn tool::Tool],
         finish: impl Fn(&types::InvokeResult) -> Option<Result<O, AgentError>>,
     ) -> Result<AgentResult<O>, AgentError> {
-        // 指定モデルから利用する LLM アダプターを決定。
+        // 指定モデルから利用する LLM アダプターを決定
         let llm = self.providers.get(model).ok_or(Kind::ModelNotConfigured)?;
 
         let tool_map = tool_refs
@@ -46,11 +46,11 @@ impl Agent {
         let mut output_tokens: u32 = 0;
         let mut tool_choice = ToolChoice::Auto;
 
-        // struct output を利用している場合は true となる。
+        // struct output を利用している場合は true となる
         let has_respond = tool_map.contains_key("respond");
 
         loop {
-            // 異常時のために最大試行回数を決めておく。
+            // 異常時のために最大試行回数を決めておく
             if turns >= self.max_turns {
                 return Err(Kind::MaxTurnsExceeded.default());
             }
@@ -71,7 +71,8 @@ impl Agent {
             input_tokens += res.usage.input_tokens;
             output_tokens += res.usage.output_tokens;
 
-            // 完了条件を満たすか検証する。満たしていた場合はそこで結果を返す。
+            // 完了条件を満たすか検証する
+            // 満たしていた場合はそこで結果を返す
             if let Some(result) = finish(&res) {
                 let content = result?;
                 return Ok(AgentResult {
@@ -81,7 +82,7 @@ impl Agent {
                 });
             }
 
-            // respond 以外の通常のツールで実行リクエストが来ているものを収集。
+            // respond 以外の通常のツールで実行リクエストが来ているものを収集
             let tool_calls: Vec<(String, String, serde_json::Value)> = res
                 .content
                 .iter()
@@ -120,6 +121,7 @@ impl Agent {
                 };
                 results.push(block);
             }
+
             // ツール実行結果を履歴につめて再度 invoke に回す
             history.push(Message::user(results));
         }
