@@ -15,3 +15,6 @@ serde = { version = "1.0", features = ["derive"] }
 [dev-dependencies]
 tokio = { version = "1.53", features = ["full"] }
 anyhow = "1.0"
+schemars = "1.2.1"
+reqwest = { version = "0.13.4", features = ["json"] }
+dotenvy = "0.15.7"

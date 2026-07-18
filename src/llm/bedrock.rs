@@ -1,4 +1,4 @@
-pub mod types;
+mod types;
 
 use crate::agent;
 use crate::agent::llm::LLM;
@@ -39,9 +39,9 @@ impl LLM for Adapter {
         model: &Model,
         system_prompt: &str,
         max_tokens: u32,
-        messages: &[agent::llm::types::Message],
+        messages: &[agent::types::Message],
         tools: &[Box<dyn agent::tool::Tool>],
-    ) -> Result<agent::llm::types::InvokeResult, AgentError> {
+    ) -> Result<agent::types::InvokeResult, AgentError> {
         let messages: Vec<types::Message> = messages.iter().map(|m| m.clone().into()).collect();
         let mut body = json!({
             "anthropic_version": "bedrock-2023-05-31",
@@ -98,7 +98,7 @@ mod tests {
                 &Model::BedrockClaudeSonnet46,
                 "You are a helpful assistant.",
                 1024,
-                &[agent::llm::types::Message::user_text("hello")],
+                &[agent::types::Message::user_text("hello")],
                 &[],
             )
             .await?;

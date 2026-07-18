@@ -1,4 +1,4 @@
-use crate::agent::llm::types;
+use crate::agent::types;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]

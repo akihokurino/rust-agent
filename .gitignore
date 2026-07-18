@@ -2,3 +2,4 @@
 .idea
 Makefile.local
 .envrc
+.env
