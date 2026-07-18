@@ -1,4 +1,5 @@
 use crate::agent::types;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
@@ -30,6 +31,17 @@ pub enum MessageBlock {
         content: String,
         is_error: bool,
     },
+    Document {
+        source: DocumentSource,
+    },
+}
+
+#[derive(Debug, Serialize)]
+pub struct DocumentSource {
+    #[serde(rename = "type")]
+    source_type: &'static str,
+    media_type: &'static str,
+    data: String,
 }
 
 impl From<types::Message> for Message {
@@ -65,6 +77,13 @@ impl From<types::MessageBlock> for MessageBlock {
                 tool_use_id,
                 content,
                 is_error,
+            },
+            types::MessageBlock::Pdf { data } => MessageBlock::Document {
+                source: DocumentSource {
+                    source_type: "base64",
+                    media_type: "application/pdf",
+                    data: base64::engine::general_purpose::STANDARD.encode(data),
+                },
             },
         }
     }

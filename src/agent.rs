@@ -4,7 +4,7 @@ use crate::types::agent::AgentResult;
 use crate::types::errors::AgentError;
 use crate::types::errors::Kind::ValidationException;
 use crate::types::model::Model;
-use crate::Kind;
+use crate::{Input, Kind};
 use std::collections::HashMap;
 
 pub mod llm;
@@ -26,30 +26,37 @@ impl Agent {
     async fn loop_call<O>(
         &self,
         model: &Model,
-        message: &str,
+        input: Vec<Input>,
         system: &str,
         tool_refs: &[&dyn tool::Tool],
         finish: impl Fn(&types::InvokeResult) -> Option<Result<O, AgentError>>,
     ) -> Result<AgentResult<O>, AgentError> {
+        // 指定モデルから利用する LLM アダプターを決定。
         let llm = self.providers.get(model).ok_or(Kind::ModelNotConfigured)?;
+
         let tool_map = tool_refs
             .iter()
             .map(|t| (t.name(), t))
             .collect::<HashMap<_, _>>();
 
-        let mut history = vec![Message::user_text(message)];
+        let content: Vec<MessageBlock> = input.into_iter().map(Into::into).collect();
+        let mut history = vec![Message::user(content)];
         let mut turns: u32 = 0;
         let mut input_tokens: u32 = 0;
         let mut output_tokens: u32 = 0;
         let mut tool_choice = ToolChoice::Auto;
+
+        // struct output を利用している場合は true となる。
         let has_respond = tool_map.contains_key("respond");
 
         loop {
+            // 異常時のために最大試行回数を決めておく。
             if turns >= self.max_turns {
                 return Err(Kind::MaxTurnsExceeded.default());
             }
             turns += 1;
 
+            // LLM 実行
             let res = llm
                 .invoke(
                     model,
@@ -64,6 +71,7 @@ impl Agent {
             input_tokens += res.usage.input_tokens;
             output_tokens += res.usage.output_tokens;
 
+            // 完了条件を満たすか検証する。満たしていた場合はそこで結果を返す。
             if let Some(result) = finish(&res) {
                 let content = result?;
                 return Ok(AgentResult {
@@ -73,6 +81,7 @@ impl Agent {
                 });
             }
 
+            // respond 以外の通常のツールで実行リクエストが来ているものを収集。
             let tool_calls: Vec<(String, String, serde_json::Value)> = res
                 .content
                 .iter()
@@ -84,13 +93,16 @@ impl Agent {
                 })
                 .collect();
 
+            // res から必要な情報を取得後に、消費する
             history.push(res.into());
 
+            // ツールの実行リクエストがないかつ、 struct output を求められている場合は、respond を強制的に利用させる
             if tool_calls.is_empty() && has_respond {
-                tool_choice = ToolChoice::Tool("respond".into());
+                tool_choice = ToolChoice::Specific("respond".into());
                 continue;
             }
 
+            // 実行リクエストがきたツールを全て実行
             let mut results = Vec::new();
             for (id, name, input) in tool_calls {
                 let tool = tool_map.get(&name).ok_or(Kind::ToolNotFound.default())?;
@@ -108,20 +120,20 @@ impl Agent {
                 };
                 results.push(block);
             }
-            history.push(Message::user_tool_results(results));
-
-            tool_choice = ToolChoice::Auto;
+            // ツール実行結果を履歴につめて再度 invoke に回す
+            history.push(Message::user(results));
         }
     }
 
     pub async fn run(
         &self,
         model: &Model,
-        message: &str,
+        input: Vec<Input>,
     ) -> Result<AgentResult<String>, AgentError> {
         let tool_refs: Vec<&dyn tool::Tool> = self.tools.iter().map(|t| t.as_ref()).collect();
 
-        self.loop_call(model, message, &self.system_prompt, &tool_refs, |res| {
+        self.loop_call(model, input, &self.system_prompt, &tool_refs, |res| {
+            // ToolUse でない場合は完了とする
             (!matches!(res.stop_reason, StopReason::ToolUse)).then(|| {
                 let text = res
                     .content
@@ -141,13 +153,14 @@ impl Agent {
     pub async fn run_typed<T>(
         &self,
         model: &Model,
-        message: &str,
+        input: Vec<Input>,
     ) -> Result<AgentResult<T>, AgentError>
     where
         T: serde::de::DeserializeOwned + schemars::JsonSchema + Send + Sync + 'static,
     {
-        let respond = tool::RespondTool::<T>::new();
         let mut tool_refs: Vec<&dyn tool::Tool> = self.tools.iter().map(|t| t.as_ref()).collect();
+
+        let respond = tool::RespondTool::<T>::new();
         tool_refs.push(&respond);
 
         let system = format!(
@@ -155,7 +168,9 @@ impl Agent {
             self.system_prompt
         );
 
-        self.loop_call(model, message, &system, &tool_refs, |res| {
+        self.loop_call(model, input, &system, &tool_refs, |res| {
+            // ToolUse で respond を指定している場合のみ完了とする
+            // struct output では respond ツールの input スキーマを生成させ、それを最終出力に利用する
             res.content
                 .iter()
                 .find_map(|b| match b {

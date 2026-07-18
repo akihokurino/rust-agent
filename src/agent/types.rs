@@ -1,3 +1,5 @@
+use crate::Input;
+
 #[derive(Debug, Clone)]
 pub enum Role {
     User,
@@ -10,16 +12,10 @@ pub struct Message {
     pub content: Vec<MessageBlock>,
 }
 impl Message {
-    pub fn user_text(text: impl Into<String>) -> Self {
+    pub fn user(content: Vec<MessageBlock>) -> Self {
         Message {
             role: Role::User,
-            content: vec![MessageBlock::Text { text: text.into() }],
-        }
-    }
-    pub fn user_tool_results(results: Vec<MessageBlock>) -> Self {
-        Message {
-            role: Role::User,
-            content: results,
+            content,
         }
     }
 }
@@ -47,12 +43,23 @@ pub enum MessageBlock {
         content: String,
         is_error: bool,
     },
+    Pdf {
+        data: Vec<u8>,
+    },
 }
 impl From<ResultBlock> for MessageBlock {
     fn from(value: ResultBlock) -> Self {
         match value {
             ResultBlock::Text { text } => MessageBlock::Text { text },
             ResultBlock::ToolUse { id, name, input } => MessageBlock::ToolUse { id, name, input },
+        }
+    }
+}
+impl From<Input> for MessageBlock {
+    fn from(i: Input) -> Self {
+        match i {
+            Input::Text(text) => MessageBlock::Text { text },
+            Input::Pdf(data) => MessageBlock::Pdf { data },
         }
     }
 }
@@ -93,5 +100,5 @@ pub struct Usage {
 #[derive(Clone)]
 pub enum ToolChoice {
     Auto,
-    Tool(String),
+    Specific(String),
 }

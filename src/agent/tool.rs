@@ -8,10 +8,10 @@ use std::marker::PhantomData;
 pub trait Tool: Send + Sync {
     fn name(&self) -> String;
     fn description(&self) -> String;
-    fn input_schema(&self) -> serde_json::Value;
-    async fn execute(&self, input: serde_json::Value) -> Result<serde_json::Value, AgentError>;
+    fn input_schema(&self) -> Value;
+    async fn execute(&self, input: Value) -> Result<Value, AgentError>;
 
-    fn spec(&self) -> serde_json::Value {
+    fn spec(&self) -> Value {
         serde_json::json!({
             "name": self.name(),
             "description": self.description(),

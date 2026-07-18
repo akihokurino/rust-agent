@@ -57,7 +57,9 @@ impl LLM for Adapter {
         }
         match tool_choice {
             ToolChoice::Auto => (),
-            ToolChoice::Tool(name) => body["tool_choice"] = json!({ "type": "tool", "name": name }),
+            ToolChoice::Specific(name) => {
+                body["tool_choice"] = json!({ "type": "tool", "name": name })
+            }
         }
 
         let resp = self

@@ -1719,6 +1719,7 @@ dependencies = [
  "async-trait",
  "aws-config",
  "aws-sdk-bedrockruntime",
+ "base64",
  "derive_more",
  "dotenvy",
  "reqwest",
