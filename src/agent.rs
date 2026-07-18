@@ -1,4 +1,4 @@
-use crate::agent::types::{Message, MessageBlock, ResultBlock, StopReason};
+use crate::agent::types::{Message, MessageBlock, ResultBlock, StopReason, ToolChoice};
 use crate::llm::bedrock;
 use crate::types::agent::AgentResult;
 use crate::types::errors::AgentError;
@@ -23,10 +23,15 @@ impl Agent {
         AgentBuilder::default()
     }
 
-    pub async fn run(&self, model: &Model, message: &str) -> Result<AgentResult, AgentError> {
+    pub async fn run(
+        &self,
+        model: &Model,
+        message: &str,
+    ) -> Result<AgentResult<String>, AgentError> {
         let llm = self.providers.get(model).ok_or(Kind::ModelNotConfigured)?;
         let mut history = vec![Message::user_text(message)];
 
+        let tool_refs: Vec<&dyn tool::Tool> = self.tools.iter().map(|t| t.as_ref()).collect();
         let tool_map = self
             .tools
             .iter()
@@ -43,13 +48,15 @@ impl Agent {
             }
             turns += 1;
 
+            let tool_choice = ToolChoice::Auto;
             let res = llm
                 .invoke(
                     model,
                     &self.system_prompt,
                     self.max_tokens,
                     &history,
-                    &self.tools,
+                    &tool_refs,
+                    &tool_choice,
                 )
                 .await?;
 
@@ -61,7 +68,7 @@ impl Agent {
                 .content
                 .iter()
                 .filter_map(|b| match b {
-                    ResultBlock::ToolUse { id, name, input } => {
+                    ResultBlock::ToolUse { id, name, input } if name != "respond" => {
                         Some((id.clone(), name.clone(), input.clone()))
                     }
                     _ => None,
@@ -107,6 +114,112 @@ impl Agent {
             }
 
             history.push(Message::user_tool_results(results));
+        }
+    }
+
+    pub async fn run_typed<T>(
+        &self,
+        model: &Model,
+        message: &str,
+    ) -> Result<AgentResult<T>, AgentError>
+    where
+        T: serde::de::DeserializeOwned + schemars::JsonSchema + Send + Sync + 'static,
+    {
+        let llm = self.providers.get(model).ok_or(Kind::ModelNotConfigured)?;
+
+        let respond = tool::RespondTool::<T>::new();
+        let mut tool_refs: Vec<&dyn tool::Tool> = self.tools.iter().map(|t| t.as_ref()).collect();
+        tool_refs.push(&respond);
+
+        let tool_map = self
+            .tools
+            .iter()
+            .map(|t| (t.name(), t))
+            .collect::<HashMap<_, _>>();
+
+        let system = format!(
+            "{}\n\n最終的な回答は必ず respond ツールを呼び出して返してください。",
+            self.system_prompt
+        );
+
+        let mut history = vec![Message::user_text(message)];
+        let mut turns: u32 = 0;
+        let mut input_tokens: u32 = 0;
+        let mut output_tokens: u32 = 0;
+        let mut tool_choice = ToolChoice::Auto;
+
+        loop {
+            if turns >= self.max_turns {
+                return Err(Kind::MaxTurnsExceeded.default());
+            }
+            turns += 1;
+
+            let res = llm
+                .invoke(
+                    model,
+                    &system,
+                    self.max_tokens,
+                    &history,
+                    &tool_refs,
+                    &tool_choice,
+                )
+                .await?;
+
+            input_tokens += res.usage.input_tokens;
+            output_tokens += res.usage.output_tokens;
+
+            let respond_input = res.content.iter().find_map(|b| match b {
+                ResultBlock::ToolUse { name, input, .. } if name == "respond" => {
+                    Some(input.clone())
+                }
+                _ => None,
+            });
+            if let Some(input) = respond_input {
+                let content: T = serde_json::from_value(input)?;
+                return Ok(AgentResult {
+                    content,
+                    input_tokens,
+                    output_tokens,
+                });
+            }
+
+            let tool_calls: Vec<(String, String, serde_json::Value)> = res
+                .content
+                .iter()
+                .filter_map(|b| match b {
+                    ResultBlock::ToolUse { id, name, input } if name != "respond" => {
+                        Some((id.clone(), name.clone(), input.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
+
+            history.push(res.into());
+
+            if tool_calls.is_empty() {
+                tool_choice = ToolChoice::Tool("respond".into());
+                continue;
+            }
+
+            let mut results = Vec::new();
+            for (id, name, input) in tool_calls {
+                let tool = tool_map.get(&name).ok_or(Kind::ToolNotFound.default())?;
+                let block = match tool.execute(input).await {
+                    Ok(v) => MessageBlock::ToolResult {
+                        tool_use_id: id,
+                        content: v.to_string(),
+                        is_error: false,
+                    },
+                    Err(e) => MessageBlock::ToolResult {
+                        tool_use_id: id,
+                        content: e.to_string(),
+                        is_error: true,
+                    },
+                };
+                results.push(block);
+            }
+            history.push(Message::user_tool_results(results));
+            tool_choice = ToolChoice::Auto;
         }
     }
 }

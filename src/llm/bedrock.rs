@@ -2,6 +2,7 @@ mod types;
 
 use crate::agent;
 use crate::agent::llm::LLM;
+use crate::agent::types::ToolChoice;
 use crate::llm::bedrock::types::InvokeResponse;
 use crate::types::errors::{AgentError, Kind};
 use crate::types::model::Model;
@@ -40,7 +41,8 @@ impl LLM for Adapter {
         system_prompt: &str,
         max_tokens: u32,
         messages: &[agent::types::Message],
-        tools: &[Box<dyn agent::tool::Tool>],
+        tools: &[&dyn agent::tool::Tool],
+        tool_choice: &ToolChoice,
     ) -> Result<agent::types::InvokeResult, AgentError> {
         let messages: Vec<types::Message> = messages.iter().map(|m| m.clone().into()).collect();
         let mut body = json!({
@@ -52,6 +54,10 @@ impl LLM for Adapter {
         if !tools.is_empty() {
             let specs: Vec<Value> = tools.iter().map(|t| t.spec()).collect();
             body["tools"] = json!(specs);
+        }
+        match tool_choice {
+            ToolChoice::Auto => (),
+            ToolChoice::Tool(name) => body["tool_choice"] = json!({ "type": "tool", "name": name }),
         }
 
         let resp = self
@@ -81,29 +87,5 @@ impl From<SdkError<InvokeModelError, HttpResponse>> for AgentError {
             },
             other => Kind::UnknownException.from_src(other),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // 実際にAWSを叩くので、通常の cargo test では走らせない（#[ignore]）
-    #[tokio::test]
-    #[ignore = "hits real Bedrock; run with --ignored"]
-    async fn smoke_invoke() -> anyhow::Result<()> {
-        let adapter = Adapter::new().await;
-        let out = adapter
-            .invoke(
-                &Model::BedrockClaudeSonnet46,
-                "You are a helpful assistant.",
-                1024,
-                &[agent::types::Message::user_text("hello")],
-                &[],
-            )
-            .await?;
-
-        println!("response: {:?}", out);
-        Ok(())
     }
 }

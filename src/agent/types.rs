@@ -89,3 +89,8 @@ pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
 }
+
+pub enum ToolChoice {
+    Auto,
+    Tool(String),
+}
