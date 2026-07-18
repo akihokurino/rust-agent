@@ -18,11 +18,7 @@ impl Agent {
         AgentBuilder::default()
     }
 
-    pub async fn run(
-        &self,
-        model: &Model,
-        messages: Vec<llm::types::Message>,
-    ) -> Result<String, AgentError> {
+    pub async fn run(&self, model: &Model, message: &str) -> Result<String, AgentError> {
         panic!("not implemented");
     }
 }
