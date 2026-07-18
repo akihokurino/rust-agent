@@ -1,3 +1,4 @@
+use crate::agent::tool::Tool;
 use crate::types::errors::AgentError;
 use crate::types::model::Model;
 use async_trait::async_trait;
@@ -9,18 +10,19 @@ pub trait LLM: Send + Sync {
         model: &Model,
         system_prompt: &str,
         max_tokens: u32,
-        messages: Vec<types::Message>,
+        messages: &[types::Message],
+        tools: &[Box<dyn Tool>],
     ) -> Result<types::InvokeResult, AgentError>;
 }
 
 pub mod types {
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub enum Role {
         User,
         Assistant,
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct Message {
         pub role: Role,
         pub content: Vec<MessageBlock>,
@@ -48,7 +50,7 @@ pub mod types {
         }
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub enum MessageBlock {
         Text {
             text: String,
@@ -75,14 +77,14 @@ pub mod types {
         }
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct InvokeResult {
         pub content: Vec<ResultBlock>,
         pub stop_reason: StopReason,
         pub usage: Usage,
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub enum ResultBlock {
         Text {
             text: String,
@@ -94,7 +96,7 @@ pub mod types {
         },
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub enum StopReason {
         EndTurn,
         ToolUse,
@@ -102,7 +104,7 @@ pub mod types {
         StopSequence,
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct Usage {
         pub input_tokens: u32,
         pub output_tokens: u32,

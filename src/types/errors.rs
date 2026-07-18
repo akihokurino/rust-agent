@@ -7,6 +7,8 @@ use std::sync::Arc;
 pub enum Kind {
     ModelAccessDeniedException,
     ValidationException,
+    ModelNotConfigured,
+    ToolNotFound,
     UnknownException,
 }
 impl Kind {
@@ -15,6 +17,8 @@ impl Kind {
         let msg = match self {
             Kind::ModelAccessDeniedException => "access to the requested Bedrock model was denied",
             Kind::ValidationException => "the request sent to Bedrock was invalid",
+            Kind::ModelNotConfigured => "the requested model is not configured on this agent",
+            Kind::ToolNotFound => "the requested tool was not found",
             Kind::UnknownException => "an unexpected error occurred",
         };
 

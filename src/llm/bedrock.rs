@@ -12,7 +12,7 @@ use aws_sdk_bedrockruntime::error::SdkError;
 use aws_sdk_bedrockruntime::operation::invoke_model::InvokeModelError;
 use aws_sdk_bedrockruntime::primitives::Blob;
 use aws_sdk_bedrockruntime::Client;
-use serde_json::json;
+use serde_json::{json, Value};
 
 const REGION: &str = "ap-northeast-1";
 
@@ -39,15 +39,20 @@ impl LLM for Adapter {
         model: &Model,
         system_prompt: &str,
         max_tokens: u32,
-        messages: Vec<agent::llm::types::Message>,
+        messages: &[agent::llm::types::Message],
+        tools: &[Box<dyn agent::tool::Tool>],
     ) -> Result<agent::llm::types::InvokeResult, AgentError> {
-        let messages: Vec<types::Message> = messages.into_iter().map(Into::into).collect();
-        let body = json!({
+        let messages: Vec<types::Message> = messages.iter().map(|m| m.clone().into()).collect();
+        let mut body = json!({
             "anthropic_version": "bedrock-2023-05-31",
             "system": system_prompt,
             "max_tokens": max_tokens,
             "messages": messages,
         });
+        if !tools.is_empty() {
+            let specs: Vec<Value> = tools.iter().map(|t| t.spec()).collect();
+            body["tools"] = json!(specs);
+        }
 
         let resp = self
             .client
@@ -93,7 +98,8 @@ mod tests {
                 &Model::BedrockClaudeSonnet46,
                 "You are a helpful assistant.",
                 1024,
-                vec![agent::llm::types::Message::user_text("hello")],
+                &[agent::llm::types::Message::user_text("hello")],
+                &[],
             )
             .await?;
 
