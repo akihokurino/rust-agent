@@ -5,7 +5,9 @@ use crate::types::errors::AgentError;
 use crate::types::errors::Kind::ValidationException;
 use crate::types::model::Model;
 use crate::{Input, Kind};
+use futures::future::join_all;
 use std::collections::HashMap;
+use std::time::Duration;
 
 pub mod llm;
 pub mod tool;
@@ -15,6 +17,7 @@ pub struct Agent {
     pub system_prompt: String,
     pub max_tokens: u32,
     pub max_turns: u32,
+    pub default_tool_timeout: Duration,
     pub tools: Vec<Box<dyn tool::Tool>>,
     providers: HashMap<Model, Box<dyn llm::LLM>>,
 }
@@ -104,26 +107,58 @@ impl Agent {
             }
 
             // 実行リクエストがきたツールを全て実行
-            let mut results = Vec::new();
+            let mut blocks: Vec<MessageBlock> = Vec::new();
+            let mut tasks = Vec::new();
+
             for (id, name, input) in tool_calls {
                 let tool = tool_map.get(&name).ok_or(Kind::ToolNotFound.default())?;
-                let block = match tool.execute(input).await {
-                    Ok(v) => MessageBlock::ToolResult {
-                        tool_use_id: id,
-                        content: v.to_string(),
-                        is_error: false,
-                    },
-                    Err(e) => MessageBlock::ToolResult {
-                        tool_use_id: id,
-                        content: e.to_string(),
-                        is_error: true,
-                    },
-                };
-                results.push(block);
+
+                // Future を直接配列にいれることで id, name, input, tool の借用をなくし（ move ）、ループの外で実行可能にする
+                tasks.push(async move {
+                    // ツールが固まっても実行を打ち切れるように、必ず制限時間を被せる
+                    // 時間切れはツールのエラーと同様に LLM へ差し戻し、リトライや断念を委ねる
+                    let limit = tool.timeout().unwrap_or(self.default_tool_timeout);
+
+                    let block = match tokio::time::timeout(limit, tool.execute(input)).await {
+                        Ok(Ok(v)) => MessageBlock::ToolResult {
+                            tool_use_id: id,
+                            content: v.to_string(),
+                            is_error: false,
+                        },
+                        Ok(Err(e)) => MessageBlock::ToolResult {
+                            tool_use_id: id,
+                            content: e.to_string(),
+                            is_error: true,
+                        },
+                        Err(_) => MessageBlock::ToolResult {
+                            tool_use_id: id,
+                            content: Kind::ToolTimeout
+                                .with(format!("tool `{}` timed out after {:?}", name, limit))
+                                .to_string(),
+                            is_error: true,
+                        },
+                    };
+
+                    // サブエージェント等、ツール自身が LLM を消費した分を回収して合算する
+                    let (tool_input_tokens, tool_output_tokens) = tool.sub_agent_usage();
+
+                    Ok::<_, AgentError>((block, tool_input_tokens, tool_output_tokens))
+                });
+            }
+
+            let results = join_all(tasks)
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()?;
+
+            for (block, tool_input_tokens, tool_output_tokens) in results {
+                input_tokens += tool_input_tokens;
+                output_tokens += tool_output_tokens;
+                blocks.push(block);
             }
 
             // ツール実行結果を履歴につめて再度 invoke に回す
-            history.push(Message::user(results));
+            history.push(Message::user(blocks));
         }
     }
 
@@ -191,6 +226,7 @@ pub struct AgentBuilder {
     system_prompt: String,
     max_tokens: u32,
     max_turns: u32,
+    default_tool_timeout: Duration,
     tools: Vec<Box<dyn tool::Tool>>,
     use_models: Vec<Model>,
 }
@@ -201,6 +237,7 @@ impl Default for AgentBuilder {
             system_prompt: String::new(),
             max_tokens: 1024,
             max_turns: 10,
+            default_tool_timeout: Duration::from_secs(60),
             tools: Vec::new(),
             use_models: vec![Model::BedrockClaudeSonnet46],
         }
@@ -222,6 +259,11 @@ impl AgentBuilder {
         self
     }
 
+    pub fn default_tool_timeout(mut self, timeout: Duration) -> Self {
+        self.default_tool_timeout = timeout;
+        self
+    }
+
     pub fn add_tool(mut self, tool: Box<dyn tool::Tool>) -> Self {
         self.tools.push(tool);
         self
@@ -234,9 +276,7 @@ impl AgentBuilder {
 
     pub async fn build(self) -> Result<Agent, AgentError> {
         if self.use_models.is_empty() {
-            return Err(ValidationException
-                .with("at least one model must be specified")
-                .into());
+            return Err(ValidationException.with("at least one model must be specified"));
         }
 
         let mut providers: HashMap<Model, Box<dyn llm::LLM>> = HashMap::new();
@@ -252,6 +292,7 @@ impl AgentBuilder {
             system_prompt: self.system_prompt,
             max_tokens: self.max_tokens,
             max_turns: self.max_turns,
+            default_tool_timeout: self.default_tool_timeout,
             tools: self.tools,
             providers,
         })

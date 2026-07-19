@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use rust_agent::{Agent, AgentError, Input, Kind, Model, Tool};
+use rust_agent::{Agent, AgentError, AgentTool, Input, Kind, Model, Tool};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -100,27 +100,6 @@ impl Tool for WebSearch {
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, JsonSchema)]
-struct CompanyInfo {
-    /// 会社名（正式名称）
-    name: String,
-    /// 本社所在地の都道府県。不明なら空文字。
-    prefecture: String,
-    /// 最も代表的な業種を1つ。不明なら空文字。
-    industry: String,
-    /// 本社住所（都道府県含む完全な表記）。不明なら空文字。
-    address: String,
-    /// 代表者名。不明なら空文字。
-    ceo_name: String,
-    /// 設立年月日。YYYY-MM-DD 形式。不明なら空文字。
-    established_date: String,
-    /// 資本金（公式表記のまま）。不明なら空文字。
-    capital: String,
-    /// 従業員数（公式表記のまま）。不明なら空文字。
-    employee_num: String,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize, JsonSchema)]
 enum EmploymentType {
     FullTime,
     Contract,
@@ -161,36 +140,39 @@ struct CareerExtraction {
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
-    // 1. ネット情報の抽出（会社URL → fetch_url / web_search → 構造化）
-    let company_agent = Agent::builder()
+    // 職務経歴書PDF → 構造化。業種が不明な会社だけ、子エージェントにWeb調査を委譲する。
+    //
+    // PDF(マルチモーダル入力)と構造化出力は親が握る。
+    // fetch_url が返す巨大なHTMLは子の履歴にしか積まれないため、
+    // 親のコンテキストは子が返した要約テキストだけで済む。
+    let researcher = Agent::builder()
         .system_prompt(
-            "あなたは会社の公式サイトURLから会社情報を抽出するエージェントです。\n\
-             fetch_url でページ本文を取得し、必要なら web_search で会社概要ページを探します。\n\
-             不明な項目は空文字。推測で埋めないこと。",
+            "あなたはWeb調査の専門家です。\n\
+             web_search で会社を検索し、必要なら fetch_url で公式サイトの本文を取得します。\n\
+             調査結果は、その会社の業種を1つ、簡潔に答えてください。\n\
+             見つからなかった場合は「不明」と明記し、推測で埋めないこと。",
         )
-        .max_tokens(4096)
+        .max_tokens(2048)
+        .max_turns(6)
         .add_tool(Box::new(FetchUrl))
         .add_tool(Box::new(WebSearch))
         .build()
         .await?;
 
-    let company = company_agent
-        .run_typed::<CompanyInfo>(
-            &MODEL,
-            vec![Input::Text(
-                "次の会社URLから会社情報を抽出してください: https://www.cybozu.co.jp/".into(),
-            )],
-        )
-        .await?;
-    println!("[company] {:#?}", company);
-
-    // 2. PDFの抽出（職務経歴書PDF → 構造化）
     let career_agent = Agent::builder()
         .system_prompt(
             "あなたは添付された職務経歴書PDFから career 情報を抽出するエージェントです。\n\
-             careers は時系列で古い順。detail は255文字以内。全項目を必ず返すこと。",
+             careers は時系列で古い順。detail は255文字以内。全項目を必ず返すこと。\n\
+             industry がPDFから読み取れない会社については、research ツールに調査を依頼してください。",
         )
         .max_tokens(4096)
+        .max_turns(12)
+        .add_tool(Box::new(AgentTool::new(
+            "research",
+            "指定された会社名をWeb検索・公式サイトから調査し、その会社の業種を返します。",
+            MODEL,
+            researcher,
+        )))
         .build()
         .await?;
 
@@ -204,6 +186,7 @@ async fn main() -> anyhow::Result<()> {
             ],
         )
         .await?;
+    // input/output tokens には子エージェントが消費した分も合算されている
     println!("[career] {:#?}", career);
 
     Ok(())
