@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use rust_agent::{Agent, AgentError, AgentTool, Input, Kind, Model, Tool};
+use rust_agent::{Agent, AgentError, Input, Kind, Model, Tool};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -100,6 +100,28 @@ impl Tool for WebSearch {
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, JsonSchema)]
+struct CompanyInfo {
+    /// 会社名（正式名称）
+    name: String,
+    /// 本社所在地の都道府県。不明な場合は空文字。
+    prefecture: String,
+    /// 最も代表的な業種を1つ。不明な場合は空文字。
+    industry: String,
+    /// 本社住所（都道府県含む完全な表記）。不明な場合は空文字。
+    address: String,
+    /// 代表者名。不明な場合は空文字。
+    ceo_name: String,
+    /// 設立年月日。必ず YYYY-MM-DD 形式（例: 1950-04-01）。
+    /// 日が不明なら 01 で補完してよい。年月日いずれかが完全に不明な場合は空文字。
+    established_date: String,
+    /// 資本金（公式表記をそのまま、例: "141,300百万円"）。不明な場合は空文字。
+    capital: String,
+    /// 従業員数（公式表記をそのまま、例: "5,800人 (連結)"）。不明な場合は空文字。
+    employee_num: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize, JsonSchema)]
 enum EmploymentType {
     FullTime,
     Contract,
@@ -115,9 +137,9 @@ struct CareerItem {
     end_ym: String,
     /// 企業名
     company_name: String,
-    /// 業種。不明なら空文字。
+    /// 業種。不明な場合は空文字。
     industry: String,
-    /// 職種。不明なら "Other"。
+    /// 職種。不明な場合は "Other"。
     occupation: String,
     /// 雇用形態
     employment_type: EmploymentType,
@@ -140,39 +162,56 @@ struct CareerExtraction {
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
 
-    // 職務経歴書PDF → 構造化。業種が不明な会社だけ、子エージェントにWeb調査を委譲する。
-    //
-    // PDF(マルチモーダル入力)と構造化出力は親が握る。
-    // fetch_url が返す巨大なHTMLは子の履歴にしか積まれないため、
-    // 親のコンテキストは子が返した要約テキストだけで済む。
-    let researcher = Agent::builder()
+    // 1. companyInfoAgent: 会社URL → Web収集 → 構造化
+    let company_agent = Agent::builder()
         .system_prompt(
-            "あなたはWeb調査の専門家です。\n\
-             web_search で会社を検索し、必要なら fetch_url で公式サイトの本文を取得します。\n\
-             調査結果は、その会社の業種を1つ、簡潔に答えてください。\n\
-             見つからなかった場合は「不明」と明記し、推測で埋めないこと。",
+            "あなたは会社の公式サイトURLから会社情報を抽出するエージェントです。\n\
+             \n\
+             入力として会社のURLが与えられます。以下の手順で必要な情報を集めてください。\n\
+             \n\
+             1. fetch_url ツールで与えられたURLのページ本文を取得する。\n\
+             2. 会社情報・会社概要・企業情報・About 等のページに会社概要が無い場合は、\n\
+             トップページのリンクや web_search で「会社名 会社概要」のように検索して\n\
+             該当ページを見つけ、fetch_url で取得する。\n\
+             3. 取得した情報を構造化された JSON で返す。\n\
+             \n\
+             注意:\n\
+             - 情報が見つからない場合は空文字 \"\" を入れる。推測で値を埋めないこと。\n\
+             - 全項目を必ず返すこと。",
         )
-        .max_tokens(2048)
-        .max_turns(6)
+        .max_tokens(4096)
         .add_tool(Box::new(FetchUrl))
         .add_tool(Box::new(WebSearch))
         .build()
         .await?;
 
+    let company = company_agent
+        .run_typed::<CompanyInfo>(
+            &MODEL,
+            vec![Input::Text(
+                "次の会社URLから会社情報を抽出してください: https://www.cybozu.co.jp/".into(),
+            )],
+        )
+        .await?;
+    println!("[company] {:#?}", company);
+
+    // 2. careerExtractorAgent: 職務経歴書PDF → 構造化（ツールなし）
     let career_agent = Agent::builder()
         .system_prompt(
-            "あなたは添付された職務経歴書PDFから career 情報を抽出するエージェントです。\n\
-             careers は時系列で古い順。detail は255文字以内。全項目を必ず返すこと。\n\
-             industry がPDFから読み取れない会社については、research ツールに調査を依頼してください。",
+            "あなたは添付された職務経歴書 PDF から career 情報を抽出するエージェントです。\n\
+             \n\
+             ユーザーメッセージに添付された PDF を読み取り、以下の手順で処理してください。\n\
+             \n\
+             1. PDF の内容から、各在籍企業ごとに項目を読み取り careers 配列にする。\n\
+             2. careers は時系列で古い順に並べる。\n\
+             3. 推測が困難な項目は空文字や \"Other\" を入れ、無理に埋めない。\n\
+             \n\
+             注意:\n\
+             - employment_type は記載が無い場合は FullTime とする。\n\
+             - detail は255文字以内厳守。\n\
+             - 全項目を必ず返すこと。",
         )
         .max_tokens(4096)
-        .max_turns(12)
-        .add_tool(Box::new(AgentTool::new(
-            "research",
-            "指定された会社名をWeb検索・公式サイトから調査し、その会社の業種を返します。",
-            MODEL,
-            researcher,
-        )))
         .build()
         .await?;
 
@@ -186,7 +225,6 @@ async fn main() -> anyhow::Result<()> {
             ],
         )
         .await?;
-    // input/output tokens には子エージェントが消費した分も合算されている
     println!("[career] {:#?}", career);
 
     Ok(())
