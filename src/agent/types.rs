@@ -154,7 +154,6 @@ mod tests {
 
         let m: Message = res.into();
 
-        // 履歴に積み直すので、必ず assistant 側になる
         assert!(matches!(m.role, Role::Assistant));
         assert_eq!(m.content.len(), 2);
         match &m.content[1] {

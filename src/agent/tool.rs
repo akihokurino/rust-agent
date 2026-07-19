@@ -1,10 +1,10 @@
-use crate::Input;
 use crate::agent::Agent;
 use crate::types::errors::{AgentError, Kind};
 use crate::types::model::Model;
+use crate::Input;
 use async_trait::async_trait;
 use schemars::JsonSchema;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -179,21 +179,8 @@ struct FetchUrlInput {
     url: String,
 }
 
-/// 指定 URL の本文を取得するサンプルツール。
-///
-/// URL は LLM が自由に組み立てるため、そのまま取りに行くと SSRF になる。
-/// （例: `http://169.254.169.254/...` で EC2 のインスタンスメタデータ、
-/// ひいては IAM 認証情報が LLM の文脈へ流れ込む）
-/// そのため以下の防御を入れている。
-///
-/// - スキームを http / https に限定する
-/// - 名前解決した全ての IP がグローバルアドレスであることを確認する
-/// - 確認済みの IP を `resolve` で固定し、再解決による差し替え（DNS リバインディング）を防ぐ
-/// - リダイレクトは reqwest に追わせず自前で回し、ホップごとに同じ検証をやり直す
-///   （公開ホストから内部アドレスへ 302 させる攻撃を防ぐため）
 #[cfg(feature = "builtin-tools")]
 pub struct FetchUrl;
-/// リダイレクト追跡の上限。ループにならないよう必ず有限で打ち切る
 #[cfg(feature = "builtin-tools")]
 const MAX_REDIRECTS: usize = 5;
 #[cfg(feature = "builtin-tools")]
@@ -342,8 +329,8 @@ fn is_global(ip: &std::net::IpAddr) -> bool {
         }
     }
 }
-/// HTML から本文だけを取り出す。
-/// 厳密なパースはせず、LLM に渡すトークンを削ることを目的とする。
+/// HTML から本文だけを取り出す
+/// 厳密なパースはせず、LLM に渡すトークンを削ることを目的とする
 #[cfg(feature = "builtin-tools")]
 fn strip_html(html: &str) -> String {
     // 表示されないのにトークンだけ食う要素は中身ごと捨てる
@@ -400,7 +387,6 @@ fn strip_html(html: &str) -> String {
     let text = out.split_whitespace().collect::<Vec<_>>().join(" ");
     decode_entities(&text).chars().take(50_000).collect()
 }
-
 /// 頻出する文字参照だけを戻す
 #[cfg(feature = "builtin-tools")]
 fn decode_entities(s: &str) -> String {

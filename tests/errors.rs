@@ -23,8 +23,7 @@ fn every_kind_has_a_default_message() {
         Kind::UnknownException,
     ] {
         let e = kind.default();
-        assert!(e.msg.is_some(), "{kind} has no default message");
-        // "Kind: message" の形になっていること
+        assert!(e.msg.is_some(), "{kind}");
         assert!(e.to_string().starts_with(&format!("{kind}: ")));
     }
 }
@@ -50,7 +49,7 @@ fn source_is_exposed_via_std_error() {
 }
 
 #[test]
-fn kind_alone_displays_without_a_colon() {
+fn a_kind_with_no_message_displays_without_a_colon() {
     let e: AgentError = Kind::ToolNotFound.into();
     assert_eq!(e.to_string(), "ToolNotFound");
 }

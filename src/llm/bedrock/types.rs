@@ -165,8 +165,6 @@ impl From<Usage> for types::Usage {
     }
 }
 
-/// Bedrock との通信フォーマットは、崩れても型では気付けず実行時エラーになる。
-/// Anthropic Messages API (bedrock-2023-05-31) の形を直接固定しておく
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,7 +282,6 @@ mod tests {
 
     #[test]
     fn every_stop_reason_is_understood() {
-        // 取りこぼすと応答全体のパースに失敗して run が落ちる
         for (raw, expected) in [
             ("end_turn", types::StopReason::EndTurn),
             ("tool_use", types::StopReason::ToolUse),
