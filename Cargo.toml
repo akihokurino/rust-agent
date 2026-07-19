@@ -3,6 +3,10 @@ name = "rust_agent"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["builtin-tools"]
+builtin-tools = ["dep:reqwest", "tokio/net"]
+
 [dependencies]
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time"] }
 async-trait = "0.1"
@@ -14,9 +18,18 @@ serde = { version = "1.0", features = ["derive"] }
 schemars = "1.2"
 base64 = "0.22"
 futures = "0.3"
+reqwest = { version = "0.13", features = ["json"], optional = true }
 
 [dev-dependencies]
-tokio = { version = "1.53", features = ["full"] }
+# test-util は full に含まれないので明示する（時計を止めてタイムアウトを検証するため）
+tokio = { version = "1.53", features = ["full", "test-util"] }
 anyhow = "1.0"
-reqwest = { version = "0.13.4", features = ["json"] }
-dotenvy = "0.15.7"
+dotenvy = "0.15"
+
+[[example]]
+name = "smoke"
+required-features = ["builtin-tools"]
+
+[[test]]
+name = "tools"
+required-features = ["builtin-tools"]

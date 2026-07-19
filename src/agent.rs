@@ -17,6 +17,7 @@ pub struct Agent {
     pub system_prompt: String,
     pub max_tokens: u32,
     pub max_turns: u32,
+    pub max_total_tokens: Option<u32>,
     pub default_tool_timeout: Duration,
     pub tools: Vec<Box<dyn tool::Tool>>,
     providers: HashMap<Model, Box<dyn llm::LLM>>,
@@ -57,6 +58,18 @@ impl Agent {
             if turns >= self.max_turns {
                 return Err(Kind::MaxTurnsExceeded.default());
             }
+
+            // ターン数だけでは、1 ターンあたりのツール呼び出し数やサブエージェントの深さで消費が積算されるため、トークン量でも上限を設ける
+            // 完了した run は finish() で先に return するので、ここには来ない
+            if let Some(budget) = self.max_total_tokens
+                && input_tokens.saturating_add(output_tokens) >= budget
+            {
+                return Err(Kind::TokenBudgetExceeded.with(format!(
+                    "consumed {} tokens (budget: {budget})",
+                    input_tokens.saturating_add(output_tokens)
+                )));
+            }
+
             turns += 1;
 
             // LLM 実行
@@ -226,6 +239,7 @@ pub struct AgentBuilder {
     system_prompt: String,
     max_tokens: u32,
     max_turns: u32,
+    max_total_tokens: Option<u32>,
     default_tool_timeout: Duration,
     tools: Vec<Box<dyn tool::Tool>>,
     use_models: Vec<Model>,
@@ -237,6 +251,7 @@ impl Default for AgentBuilder {
             system_prompt: String::new(),
             max_tokens: 1024,
             max_turns: 10,
+            max_total_tokens: None,
             default_tool_timeout: Duration::from_secs(60),
             tools: Vec::new(),
             use_models: vec![Model::BedrockClaudeSonnet46],
@@ -256,6 +271,11 @@ impl AgentBuilder {
 
     pub fn max_turns(mut self, turns: u32) -> Self {
         self.max_turns = turns;
+        self
+    }
+
+    pub fn max_total_tokens(mut self, tokens: u32) -> Self {
+        self.max_total_tokens = Some(tokens);
         self
     }
 
@@ -292,9 +312,421 @@ impl AgentBuilder {
             system_prompt: self.system_prompt,
             max_tokens: self.max_tokens,
             max_turns: self.max_turns,
+            max_total_tokens: self.max_total_tokens,
             default_tool_timeout: self.default_tool_timeout,
             tools: self.tools,
             providers,
         })
+    }
+}
+
+/// `loop_call` の検証。
+/// LLM は外部から差し替えられない設計なので、クレート内からのみ偽実装を注入する
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::types::{InvokeResult, Usage};
+    use async_trait::async_trait;
+    use serde_json::{Value, json};
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    const MODEL: Model = Model::BedrockClaudeSonnet46;
+
+    // ---------- 偽 LLM ----------
+
+    #[derive(Default)]
+    struct Recorder {
+        calls: AtomicU32,
+        last_history: Mutex<Vec<Message>>,
+        tool_choices: Mutex<Vec<String>>,
+    }
+
+    struct FakeLlm {
+        /// 先頭から消費し、最後の 1 つは繰り返す。
+        /// 「LLM がツールを呼び続ける」状況を作れないと max_turns を検証できない
+        script: Mutex<VecDeque<InvokeResult>>,
+        rec: Arc<Recorder>,
+    }
+
+    #[async_trait]
+    impl llm::LLM for FakeLlm {
+        async fn invoke(
+            &self,
+            _: &Model,
+            _: &str,
+            _: u32,
+            messages: &[Message],
+            _: &[&dyn tool::Tool],
+            tool_choice: &ToolChoice,
+        ) -> Result<InvokeResult, AgentError> {
+            self.rec.calls.fetch_add(1, Ordering::Relaxed);
+            *self.rec.last_history.lock().unwrap() = messages.to_vec();
+            self.rec
+                .tool_choices
+                .lock()
+                .unwrap()
+                .push(match tool_choice {
+                    ToolChoice::Auto => "auto".into(),
+                    ToolChoice::Specific(n) => n.clone(),
+                });
+
+            let mut script = self.script.lock().unwrap();
+            Ok(if script.len() > 1 {
+                script.pop_front().unwrap()
+            } else {
+                script.front().unwrap().clone()
+            })
+        }
+    }
+
+    fn ends(text: &str, usage: (u32, u32)) -> InvokeResult {
+        InvokeResult {
+            content: vec![ResultBlock::Text { text: text.into() }],
+            stop_reason: StopReason::EndTurn,
+            usage: Usage {
+                input_tokens: usage.0,
+                output_tokens: usage.1,
+            },
+        }
+    }
+
+    fn calls(names: &[&str], usage: (u32, u32)) -> InvokeResult {
+        InvokeResult {
+            content: names
+                .iter()
+                .enumerate()
+                .map(|(i, name)| ResultBlock::ToolUse {
+                    id: format!("tu_{i}"),
+                    name: (*name).into(),
+                    input: json!({}),
+                })
+                .collect(),
+            stop_reason: StopReason::ToolUse,
+            usage: Usage {
+                input_tokens: usage.0,
+                output_tokens: usage.1,
+            },
+        }
+    }
+
+    fn agent_with(
+        script: Vec<InvokeResult>,
+        tools: Vec<Box<dyn tool::Tool>>,
+    ) -> (Agent, Arc<Recorder>) {
+        let rec = Arc::new(Recorder::default());
+        let mut providers: HashMap<Model, Box<dyn llm::LLM>> = HashMap::new();
+        providers.insert(
+            MODEL,
+            Box::new(FakeLlm {
+                script: Mutex::new(script.into()),
+                rec: rec.clone(),
+            }),
+        );
+
+        let agent = Agent {
+            system_prompt: String::new(),
+            max_tokens: 1024,
+            max_turns: 10,
+            max_total_tokens: None,
+            default_tool_timeout: Duration::from_secs(60),
+            tools,
+            providers,
+        };
+        (agent, rec)
+    }
+
+    fn go() -> Vec<Input> {
+        vec![Input::Text("go".into())]
+    }
+
+    // ---------- 偽ツール ----------
+
+    struct SlowTool {
+        name: &'static str,
+        delay: Duration,
+    }
+    #[async_trait]
+    impl tool::Tool for SlowTool {
+        fn name(&self) -> String {
+            self.name.into()
+        }
+        fn description(&self) -> String {
+            "test".into()
+        }
+        fn input_schema(&self) -> Value {
+            json!({ "type": "object" })
+        }
+        async fn execute(&self, _: Value) -> Result<Value, AgentError> {
+            tokio::time::sleep(self.delay).await;
+            Ok(json!("done"))
+        }
+    }
+
+    /// サブエージェントのようにトークンを消費するツール
+    struct UsageTool {
+        usage: (u32, u32),
+    }
+    #[async_trait]
+    impl tool::Tool for UsageTool {
+        fn name(&self) -> String {
+            "sub".into()
+        }
+        fn description(&self) -> String {
+            "test".into()
+        }
+        fn input_schema(&self) -> Value {
+            json!({ "type": "object" })
+        }
+        fn sub_agent_usage(&self) -> (u32, u32) {
+            self.usage
+        }
+        async fn execute(&self, _: Value) -> Result<Value, AgentError> {
+            Ok(json!("done"))
+        }
+    }
+
+    // ---------- ループが必ず止まること ----------
+
+    #[tokio::test]
+    async fn max_turns_bounds_the_loop() {
+        // ツールを呼び続ける LLM。止めるものが max_turns しかない状況
+        let (mut agent, rec) = agent_with(
+            vec![calls(&["noop"], (1, 1))],
+            vec![Box::new(SlowTool {
+                name: "noop",
+                delay: Duration::ZERO,
+            })],
+        );
+        agent.max_turns = 3;
+
+        let err = agent.run(&MODEL, go()).await.unwrap_err();
+
+        assert_eq!(err.kind, Kind::MaxTurnsExceeded);
+        // LLM 呼び出しが max_turns を超えないこと（超過分は課金される）
+        assert_eq!(rec.calls.load(Ordering::Relaxed), 3);
+    }
+
+    #[tokio::test]
+    async fn token_budget_bounds_the_loop() {
+        let (mut agent, rec) = agent_with(
+            vec![calls(&["noop"], (100, 50))],
+            vec![Box::new(SlowTool {
+                name: "noop",
+                delay: Duration::ZERO,
+            })],
+        );
+        agent.max_turns = 100; // ターン数では止まらないようにする
+        agent.max_total_tokens = Some(300);
+
+        let err = agent.run(&MODEL, go()).await.unwrap_err();
+
+        assert_eq!(err.kind, Kind::TokenBudgetExceeded);
+        // 1 ターン 150 なので 2 ターンで 300 に到達し、3 ターン目に入る前に止まる
+        assert_eq!(rec.calls.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn budget_never_discards_a_finished_run() {
+        // 予算を使い切っていても、答えが出ているなら返す
+        let (mut agent, _) = agent_with(vec![ends("答え", (1000, 1000))], vec![]);
+        agent.max_total_tokens = Some(10);
+
+        let res = agent.run(&MODEL, go()).await.unwrap();
+
+        assert_eq!(res.content, "答え");
+        assert_eq!(res.input_tokens + res.output_tokens, 2000);
+    }
+
+    #[tokio::test]
+    async fn unknown_tool_is_rejected() {
+        let (agent, _) = agent_with(vec![calls(&["nope"], (1, 1))], vec![]);
+
+        assert_eq!(
+            agent.run(&MODEL, go()).await.unwrap_err().kind,
+            Kind::ToolNotFound
+        );
+    }
+
+    // ---------- トークン集計 ----------
+
+    #[tokio::test]
+    async fn sub_agent_usage_is_folded_into_the_total() {
+        let (agent, _) = agent_with(
+            vec![calls(&["sub"], (10, 5)), ends("done", (1, 2))],
+            vec![Box::new(UsageTool { usage: (700, 300) })],
+        );
+
+        let res = agent.run(&MODEL, go()).await.unwrap();
+
+        // 親の 2 回分 + ツールが内部で消費した分
+        assert_eq!(res.input_tokens, 10 + 700 + 1);
+        assert_eq!(res.output_tokens, 5 + 300 + 2);
+    }
+
+    // ---------- ツール実行 ----------
+
+    #[tokio::test(start_paused = true)]
+    async fn tools_in_one_turn_run_concurrently() {
+        let (agent, _) = agent_with(
+            vec![calls(&["a", "b", "c"], (1, 1)), ends("done", (1, 1))],
+            vec![
+                Box::new(SlowTool {
+                    name: "a",
+                    delay: Duration::from_secs(3),
+                }),
+                Box::new(SlowTool {
+                    name: "b",
+                    delay: Duration::from_secs(3),
+                }),
+                Box::new(SlowTool {
+                    name: "c",
+                    delay: Duration::from_secs(3),
+                }),
+            ],
+        );
+
+        let start = tokio::time::Instant::now();
+        agent.run(&MODEL, go()).await.unwrap();
+        let elapsed = start.elapsed();
+
+        // 逐次実行なら 9 秒かかる
+        assert!(elapsed >= Duration::from_secs(3), "{elapsed:?}");
+        assert!(
+            elapsed < Duration::from_secs(4),
+            "逐次になっている: {elapsed:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_hung_tool_times_out_and_is_handed_back_to_the_llm() {
+        let (mut agent, rec) = agent_with(
+            vec![calls(&["hang"], (1, 1)), ends("諦めます", (1, 1))],
+            vec![Box::new(SlowTool {
+                name: "hang",
+                delay: Duration::from_secs(9999),
+            })],
+        );
+        agent.default_tool_timeout = Duration::from_millis(50);
+
+        // 打ち切った上でループが続き、LLM が判断できること
+        let res = agent.run(&MODEL, go()).await.unwrap();
+        assert_eq!(res.content, "諦めます");
+
+        // 時間切れはエラーとして差し戻される
+        let history = rec.last_history.lock().unwrap();
+        match &history.last().unwrap().content[0] {
+            MessageBlock::ToolResult {
+                content, is_error, ..
+            } => {
+                assert!(is_error);
+                assert!(content.contains("ToolTimeout"), "{content}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_tool_specific_timeout_overrides_the_default() {
+        struct Impatient;
+        #[async_trait]
+        impl tool::Tool for Impatient {
+            fn name(&self) -> String {
+                "hang".into()
+            }
+            fn description(&self) -> String {
+                "test".into()
+            }
+            fn input_schema(&self) -> Value {
+                json!({ "type": "object" })
+            }
+            fn timeout(&self) -> Option<Duration> {
+                Some(Duration::from_millis(10))
+            }
+            async fn execute(&self, _: Value) -> Result<Value, AgentError> {
+                tokio::time::sleep(Duration::from_secs(9999)).await;
+                Ok(json!("never"))
+            }
+        }
+
+        let (mut agent, _) = agent_with(
+            vec![calls(&["hang"], (1, 1)), ends("done", (1, 1))],
+            vec![Box::new(Impatient)],
+        );
+        agent.default_tool_timeout = Duration::from_secs(600);
+
+        let start = tokio::time::Instant::now();
+        agent.run(&MODEL, go()).await.unwrap();
+
+        // ツール側の 10ms が効いていれば、既定の 600 秒は待たない
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            start.elapsed()
+        );
+    }
+
+    // ---------- 構造化出力 ----------
+
+    #[tokio::test]
+    async fn respond_is_forced_when_the_model_replies_in_plain_text() {
+        #[derive(serde::Deserialize, schemars::JsonSchema)]
+        struct Answer {
+            pref: String,
+        }
+
+        let respond = InvokeResult {
+            content: vec![ResultBlock::ToolUse {
+                id: "r".into(),
+                name: "respond".into(),
+                input: json!({ "pref": "東京" }),
+            }],
+            stop_reason: StopReason::ToolUse,
+            usage: Usage {
+                input_tokens: 1,
+                output_tokens: 1,
+            },
+        };
+        // 1 ターン目はただのテキストで返してくる
+        let (agent, rec) = agent_with(vec![ends("東京です", (1, 1)), respond], vec![]);
+
+        let res = agent.run_typed::<Answer>(&MODEL, go()).await.unwrap();
+
+        assert_eq!(res.content.pref, "東京");
+        // 2 ターン目で respond を名指しさせていること
+        assert_eq!(*rec.tool_choices.lock().unwrap(), ["auto", "respond"]);
+    }
+
+    #[tokio::test]
+    async fn malformed_structured_output_is_an_error() {
+        #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+        struct Answer {
+            #[allow(dead_code)]
+            pref: String,
+        }
+
+        let bad = InvokeResult {
+            content: vec![ResultBlock::ToolUse {
+                id: "r".into(),
+                name: "respond".into(),
+                input: json!({ "pref": 42 }), // 型が違う
+            }],
+            stop_reason: StopReason::ToolUse,
+            usage: Usage {
+                input_tokens: 1,
+                output_tokens: 1,
+            },
+        };
+        let (agent, _) = agent_with(vec![bad], vec![]);
+
+        assert_eq!(
+            agent
+                .run_typed::<Answer>(&MODEL, go())
+                .await
+                .unwrap_err()
+                .kind,
+            Kind::UnknownException
+        );
     }
 }

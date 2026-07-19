@@ -6,6 +6,7 @@ use crate::types::model::Model;
 use async_trait::async_trait;
 
 #[async_trait]
+#[allow(clippy::upper_case_acronyms)]
 pub trait LLM: Send + Sync {
     async fn invoke(
         &self,

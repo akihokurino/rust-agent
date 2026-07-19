@@ -8,12 +8,12 @@ use crate::types::errors::{AgentError, Kind};
 use crate::types::model::Model;
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
+use aws_sdk_bedrockruntime::Client;
 use aws_sdk_bedrockruntime::config::http::HttpResponse;
 use aws_sdk_bedrockruntime::error::SdkError;
 use aws_sdk_bedrockruntime::operation::invoke_model::InvokeModelError;
 use aws_sdk_bedrockruntime::primitives::Blob;
-use aws_sdk_bedrockruntime::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const REGION: &str = "ap-northeast-1";
 

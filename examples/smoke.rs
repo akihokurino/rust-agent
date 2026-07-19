@@ -1,102 +1,8 @@
-use async_trait::async_trait;
-use rust_agent::{Agent, AgentError, Input, Kind, Model, Tool};
+use rust_agent::{Agent, FetchUrl, Input, Model, WebSearch};
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::{json, Value};
 
 const MODEL: Model = Model::BedrockClaudeSonnet46;
-
-// ---------- tools ----------
-
-fn strip_html(html: &str) -> String {
-    let mut out = String::new();
-    let mut in_tag = false;
-    for c in html.chars() {
-        match c {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => out.push(c),
-            _ => {}
-        }
-    }
-    out.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(50_000)
-        .collect()
-}
-
-#[derive(Deserialize, JsonSchema)]
-struct FetchUrlInput {
-    /// 取得するページのURL
-    url: String,
-}
-
-struct FetchUrl;
-
-#[async_trait]
-impl Tool for FetchUrl {
-    fn name(&self) -> String {
-        "fetch_url".into()
-    }
-    fn description(&self) -> String {
-        "指定されたURLのWebページ本文を取得します。企業の公式サイト等の情報収集に使います。".into()
-    }
-    fn input_schema(&self) -> Value {
-        serde_json::to_value(schemars::schema_for!(FetchUrlInput)).unwrap()
-    }
-    async fn execute(&self, input: Value) -> Result<Value, AgentError> {
-        let args: FetchUrlInput = serde_json::from_value(input)?;
-        let resp = reqwest::Client::new()
-            .get(&args.url)
-            .header("User-Agent", "Mozilla/5.0 (compatible; CompanyResearcherBot/1.0)")
-            .send()
-            .await
-            .map_err(Kind::UnknownException.from_srcf())?;
-        let status = resp.status().as_u16();
-        let html = resp.text().await.map_err(Kind::UnknownException.from_srcf())?;
-        Ok(json!({ "content": strip_html(&html), "status": status }))
-    }
-}
-
-#[derive(Deserialize, JsonSchema)]
-struct WebSearchInput {
-    /// 検索クエリ
-    query: String,
-}
-
-struct WebSearch;
-
-#[async_trait]
-impl Tool for WebSearch {
-    fn name(&self) -> String {
-        "web_search".into()
-    }
-    fn description(&self) -> String {
-        "Google検索を行い、検索結果を取得します。".into()
-    }
-    fn input_schema(&self) -> Value {
-        serde_json::to_value(schemars::schema_for!(WebSearchInput)).unwrap()
-    }
-    async fn execute(&self, input: Value) -> Result<Value, AgentError> {
-        let args: WebSearchInput = serde_json::from_value(input)?;
-        let api_key = std::env::var("SERPER_API_KEY").unwrap_or_default();
-        let resp = reqwest::Client::new()
-            .post("https://google.serper.dev/search")
-            .header("X-API-KEY", api_key)
-            .json(&json!({ "q": args.query, "gl": "jp", "hl": "ja", "num": 5 }))
-            .send()
-            .await
-            .map_err(Kind::UnknownException.from_srcf())?
-            .json::<Value>()
-            .await
-            .map_err(Kind::UnknownException.from_srcf())?;
-        Ok(json!({ "results": resp["organic"] }))
-    }
-}
-
-// ---------- schemas ----------
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -155,8 +61,6 @@ struct CareerExtraction {
     /// 時系列で古い順に並べた経歴の配列
     careers: Vec<CareerItem>,
 }
-
-// ---------- main ----------
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

@@ -11,6 +11,7 @@ pub enum Kind {
     ToolNotFound,
     ToolTimeout,
     MaxTurnsExceeded,
+    TokenBudgetExceeded,
     UnknownException,
 }
 impl Kind {
@@ -23,6 +24,7 @@ impl Kind {
             Kind::ToolNotFound => "the requested tool was not found",
             Kind::ToolTimeout => "the tool did not finish within the allotted time",
             Kind::MaxTurnsExceeded => "the maximum number of turns has been exceeded",
+            Kind::TokenBudgetExceeded => "the token budget for this run has been exhausted",
             Kind::UnknownException => "an unexpected error occurred",
         };
 
