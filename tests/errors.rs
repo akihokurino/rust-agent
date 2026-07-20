@@ -18,6 +18,7 @@ fn every_kind_has_a_default_message() {
         Kind::ModelNotConfigured,
         Kind::ToolNotFound,
         Kind::ToolTimeout,
+        Kind::TooManyToolCalls,
         Kind::MaxTurnsExceeded,
         Kind::TokenBudgetExceeded,
         Kind::UnknownException,

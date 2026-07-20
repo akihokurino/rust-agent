@@ -7,17 +7,35 @@ use crate::types::model::Model;
 use crate::{Input, Kind};
 use futures::future::join_all;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 pub mod llm;
 pub mod tool;
 pub mod types;
 
+/// 1 回の run に割り当てられた予算と、その消費を報告する先。
+/// 報告先は親の `AgentTool` が持つカウンタで、1 ターンごとに書くことで
+/// 途中で打ち切られても消費が失われないようにしている
+struct Budget<'a> {
+    limit: u32,
+    sink: Option<(&'a AtomicU32, &'a AtomicU32)>,
+}
+impl Budget<'_> {
+    fn record(&self, input: u32, output: u32) {
+        if let Some((i, o)) = self.sink {
+            i.fetch_add(input, Ordering::Relaxed);
+            o.fetch_add(output, Ordering::Relaxed);
+        }
+    }
+}
+
 pub struct Agent {
     pub system_prompt: String,
     pub max_tokens: u32,
     pub max_turns: u32,
-    pub max_total_tokens: Option<u32>,
+    pub max_total_tokens: u32,
+    pub max_tool_calls_per_turn: u32,
     pub default_tool_timeout: Duration,
     pub tools: Vec<Box<dyn tool::Tool>>,
     providers: HashMap<Model, Box<dyn llm::LLM>>,
@@ -33,6 +51,7 @@ impl Agent {
         input: Vec<Input>,
         system: &str,
         tool_refs: &[&dyn tool::Tool],
+        budget: Budget<'_>,
         finish: impl Fn(&types::InvokeResult) -> Option<Result<O, AgentError>>,
     ) -> Result<AgentResult<O>, AgentError> {
         // 指定モデルから利用する LLM アダプターを決定
@@ -61,12 +80,11 @@ impl Agent {
 
             // ターン数だけでは、1 ターンあたりのツール呼び出し数やサブエージェントの深さで消費が積算されるため、トークン量でも上限を設ける
             // 完了した run は finish() で先に return するので、ここには来ない
-            if let Some(budget) = self.max_total_tokens
-                && input_tokens.saturating_add(output_tokens) >= budget
-            {
+            let spent = input_tokens.saturating_add(output_tokens);
+            if spent >= budget.limit {
                 return Err(Kind::TokenBudgetExceeded.with(format!(
-                    "consumed {} tokens (budget: {budget})",
-                    input_tokens.saturating_add(output_tokens)
+                    "consumed {spent} tokens (budget: {})",
+                    budget.limit
                 )));
             }
 
@@ -86,6 +104,7 @@ impl Agent {
 
             input_tokens += res.usage.input_tokens;
             output_tokens += res.usage.output_tokens;
+            budget.record(res.usage.input_tokens, res.usage.output_tokens);
 
             // 完了条件を満たすか検証する
             // 満たしていた場合はそこで結果を返す
@@ -122,9 +141,36 @@ impl Agent {
             // 実行リクエストがきたツールを全て実行
             let mut blocks: Vec<MessageBlock> = Vec::new();
             let mut tasks = Vec::new();
+            let limit = self.max_tool_calls_per_turn as usize;
 
-            for (id, name, input) in tool_calls {
+            // 残りをこのターンで動かすツールに等分する。
+            // 各ツールが取り分を守る限り、木全体でも budget を超えない
+            let running = tool_calls.len().min(limit).max(1) as u32;
+            let share = budget
+                .limit
+                .saturating_sub(input_tokens.saturating_add(output_tokens))
+                / running;
+
+            for (i, (id, name, input)) in tool_calls.into_iter().enumerate() {
+                // 上限を超えた分は実行しない
+                // tool_use には必ず tool_result を返す必要があるので、拒否も結果として返し、
+                // 次のターンで LLM に絞り込ませる
+                if i >= limit {
+                    blocks.push(MessageBlock::ToolResult {
+                        tool_use_id: id,
+                        content: Kind::TooManyToolCalls
+                            .with(format!(
+                                "at most {limit} tools may be called per turn; \
+                                 `{name}` was not run. call fewer tools at a time."
+                            ))
+                            .to_string(),
+                        is_error: true,
+                    });
+                    continue;
+                }
+
                 let tool = tool_map.get(&name).ok_or(Kind::ToolNotFound.default())?;
+                tool.set_token_budget(share);
 
                 // Future を直接配列にいれることで id, name, input, tool の借用をなくし（ move ）、ループの外で実行可能にする
                 tasks.push(async move {
@@ -167,6 +213,7 @@ impl Agent {
             for (block, tool_input_tokens, tool_output_tokens) in results {
                 input_tokens += tool_input_tokens;
                 output_tokens += tool_output_tokens;
+                budget.record(tool_input_tokens, tool_output_tokens);
                 blocks.push(block);
             }
 
@@ -180,23 +227,45 @@ impl Agent {
         model: &Model,
         input: Vec<Input>,
     ) -> Result<AgentResult<String>, AgentError> {
+        self.run_within(model, input, u32::MAX, None).await
+    }
+
+    /// 親エージェントから渡された残り予算の範囲で走らせる。
+    /// 自身の `max_total_tokens` と、渡された値の小さい方に従う
+    pub(crate) async fn run_within(
+        &self,
+        model: &Model,
+        input: Vec<Input>,
+        budget: u32,
+        sink: Option<(&AtomicU32, &AtomicU32)>,
+    ) -> Result<AgentResult<String>, AgentError> {
         let tool_refs: Vec<&dyn tool::Tool> = self.tools.iter().map(|t| t.as_ref()).collect();
 
-        self.loop_call(model, input, &self.system_prompt, &tool_refs, |res| {
-            // ToolUse でない場合は完了とする
-            (!matches!(res.stop_reason, StopReason::ToolUse)).then(|| {
-                let text = res
-                    .content
-                    .iter()
-                    .filter_map(|b| match b {
-                        ResultBlock::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("");
-                Ok(text)
-            })
-        })
+        self.loop_call(
+            model,
+            input,
+            &self.system_prompt,
+            &tool_refs,
+            Budget {
+                limit: self.max_total_tokens.min(budget),
+                sink,
+            },
+            |res| {
+                // ToolUse でない場合は完了とする
+                (!matches!(res.stop_reason, StopReason::ToolUse)).then(|| {
+                    let text = res
+                        .content
+                        .iter()
+                        .filter_map(|b| match b {
+                            ResultBlock::Text { text } => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    Ok(text)
+                })
+            },
+        )
         .await
     }
 
@@ -218,19 +287,29 @@ impl Agent {
             self.system_prompt
         );
 
-        self.loop_call(model, input, &system, &tool_refs, |res| {
-            // ToolUse で respond を指定している場合のみ完了とする
-            // struct output では respond ツールの input スキーマを生成させ、それを最終出力に利用する
-            res.content
-                .iter()
-                .find_map(|b| match b {
-                    ResultBlock::ToolUse { name, input, .. } if name == "respond" => {
-                        Some(input.clone())
-                    }
-                    _ => None,
-                })
-                .map(|input| serde_json::from_value(input).map_err(Into::into))
-        })
+        self.loop_call(
+            model,
+            input,
+            &system,
+            &tool_refs,
+            Budget {
+                limit: self.max_total_tokens,
+                sink: None,
+            },
+            |res| {
+                // ToolUse で respond を指定している場合のみ完了とする
+                // struct output では respond ツールの input スキーマを生成させ、それを最終出力に利用する
+                res.content
+                    .iter()
+                    .find_map(|b| match b {
+                        ResultBlock::ToolUse { name, input, .. } if name == "respond" => {
+                            Some(input.clone())
+                        }
+                        _ => None,
+                    })
+                    .map(|input| serde_json::from_value(input).map_err(Into::into))
+            },
+        )
         .await
     }
 }
@@ -239,7 +318,8 @@ pub struct AgentBuilder {
     system_prompt: String,
     max_tokens: u32,
     max_turns: u32,
-    max_total_tokens: Option<u32>,
+    max_total_tokens: u32,
+    max_tool_calls_per_turn: u32,
     default_tool_timeout: Duration,
     tools: Vec<Box<dyn tool::Tool>>,
     use_models: Vec<Model>,
@@ -251,7 +331,8 @@ impl Default for AgentBuilder {
             system_prompt: String::new(),
             max_tokens: 1024,
             max_turns: 10,
-            max_total_tokens: None,
+            max_total_tokens: 500_000,
+            max_tool_calls_per_turn: 8,
             default_tool_timeout: Duration::from_secs(60),
             tools: Vec::new(),
             use_models: vec![Model::BedrockClaudeSonnet46],
@@ -275,7 +356,12 @@ impl AgentBuilder {
     }
 
     pub fn max_total_tokens(mut self, tokens: u32) -> Self {
-        self.max_total_tokens = Some(tokens);
+        self.max_total_tokens = tokens;
+        self
+    }
+
+    pub fn max_tool_calls_per_turn(mut self, calls: u32) -> Self {
+        self.max_tool_calls_per_turn = calls;
         self
     }
 
@@ -313,6 +399,7 @@ impl AgentBuilder {
             max_tokens: self.max_tokens,
             max_turns: self.max_turns,
             max_total_tokens: self.max_total_tokens,
+            max_tool_calls_per_turn: self.max_tool_calls_per_turn,
             default_tool_timeout: self.default_tool_timeout,
             tools: self.tools,
             providers,
@@ -342,6 +429,7 @@ mod tests {
     struct FakeLlm {
         script_repeating_last: Mutex<VecDeque<InvokeResult>>,
         rec: Arc<Recorder>,
+        delay: Duration,
     }
 
     #[async_trait]
@@ -355,6 +443,7 @@ mod tests {
             _: &[&dyn tool::Tool],
             tool_choice: &ToolChoice,
         ) -> Result<InvokeResult, AgentError> {
+            tokio::time::sleep(self.delay).await;
             self.rec.calls.fetch_add(1, Ordering::Relaxed);
             *self.rec.last_history.lock().unwrap() = messages.to_vec();
             self.rec
@@ -394,7 +483,7 @@ mod tests {
                 .map(|(i, name)| ResultBlock::ToolUse {
                     id: format!("tu_{i}"),
                     name: (*name).into(),
-                    input: json!({}),
+                    input: json!({ "prompt": "go" }),
                 })
                 .collect(),
             stop_reason: StopReason::ToolUse,
@@ -431,6 +520,7 @@ mod tests {
             Box::new(FakeLlm {
                 script_repeating_last: Mutex::new(script.into()),
                 rec: rec.clone(),
+                delay: Duration::ZERO,
             }),
         );
 
@@ -438,7 +528,8 @@ mod tests {
             system_prompt: String::new(),
             max_tokens: 1024,
             max_turns: 10,
-            max_total_tokens: None,
+            max_total_tokens: u32::MAX,
+            max_tool_calls_per_turn: 8,
             default_tool_timeout: Duration::from_secs(60),
             tools,
             providers,
@@ -515,7 +606,7 @@ mod tests {
     async fn token_budget_stops_the_loop_before_max_turns_does() {
         let (mut agent, rec) = agent_with(vec![calls(&["noop"], (100, 50))], vec![instant("noop")]);
         agent.max_turns = 100;
-        agent.max_total_tokens = Some(300);
+        agent.max_total_tokens = 300;
 
         let err = agent.run(&MODEL, go()).await.unwrap_err();
 
@@ -526,7 +617,7 @@ mod tests {
     #[tokio::test]
     async fn an_exhausted_budget_still_returns_an_answer_that_was_reached() {
         let (mut agent, _) = agent_with(vec![ends("答え", (1000, 1000))], vec![]);
-        agent.max_total_tokens = Some(10);
+        agent.max_total_tokens = 10;
 
         let res = agent.run(&MODEL, go()).await.unwrap();
 
@@ -555,6 +646,135 @@ mod tests {
 
         assert_eq!(res.input_tokens, 10 + 700 + 1);
         assert_eq!(res.output_tokens, 5 + 300 + 2);
+    }
+
+    struct BudgetProbe {
+        seen: Arc<Mutex<Vec<u32>>>,
+    }
+    #[async_trait]
+    impl tool::Tool for BudgetProbe {
+        fn name(&self) -> String {
+            "sub".into()
+        }
+        fn description(&self) -> String {
+            "test".into()
+        }
+        fn input_schema(&self) -> Value {
+            json!({ "type": "object" })
+        }
+        fn set_token_budget(&self, remaining: u32) {
+            self.seen.lock().unwrap().push(remaining);
+        }
+        async fn execute(&self, _: Value) -> Result<Value, AgentError> {
+            Ok(json!("done"))
+        }
+    }
+
+    #[tokio::test]
+    async fn the_remaining_budget_is_split_across_the_tools_of_a_turn() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (mut agent, _) = agent_with(
+            vec![
+                calls(&["sub", "sub", "sub", "sub"], (100, 100)),
+                ends("done", (1, 1)),
+            ],
+            vec![Box::new(BudgetProbe { seen: seen.clone() })],
+        );
+        agent.max_total_tokens = 1_000;
+        agent.max_tool_calls_per_turn = 2;
+
+        agent.run(&MODEL, go()).await.unwrap();
+
+        // 1000 - 200 消費済み = 残り 800 を、実行する 2 本で等分
+        assert_eq!(*seen.lock().unwrap(), [400, 400]);
+    }
+
+    /// 好きな応答と 1 回あたりの所要時間を持つ子エージェント
+    fn child_agent(response: InvokeResult, per_call: Duration) -> (Agent, Arc<Recorder>) {
+        let (mut agent, _) = agent_with(vec![], vec![instant("noop")]);
+        let rec = Arc::new(Recorder::default());
+        let mut providers: HashMap<Model, Box<dyn llm::LLM>> = HashMap::new();
+        providers.insert(
+            MODEL,
+            Box::new(FakeLlm {
+                script_repeating_last: Mutex::new(vec![response].into()),
+                rec: rec.clone(),
+                delay: per_call,
+            }),
+        );
+        agent.providers = providers;
+        agent.max_turns = 1000;
+        agent.max_total_tokens = u32::MAX;
+        (agent, rec)
+    }
+
+    #[tokio::test]
+    async fn a_sub_agent_cannot_outspend_the_parent_budget() {
+        // 子は無制限に設定してある（max_turns 1000 / 予算 u32::MAX）
+        let (child, child_rec) = child_agent(calls(&["noop"], (100, 100)), Duration::ZERO);
+
+        let (mut parent, _) = agent_with(
+            vec![calls(&["research"], (10, 10)), ends("done", (1, 1))],
+            vec![Box::new(tool::AgentTool::new(
+                "research", "test", MODEL, child,
+            ))],
+        );
+        parent.max_total_tokens = 5_000;
+
+        let err = parent.run(&MODEL, go()).await.unwrap_err();
+        assert_eq!(err.kind, Kind::TokenBudgetExceeded);
+
+        // 子は自分の上限ではなく、親から渡された取り分で止まっている
+        let child_spent = child_rec.calls.load(Ordering::Relaxed) * 200;
+        assert!(child_spent <= 5_000, "子が {child_spent} 使った");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tokens_spent_by_a_sub_agent_survive_its_cancellation() {
+        // 子は 1 回 10 秒かけて 50,000 使う。親は 25 秒で打ち切る
+        let (child, _) = child_agent(calls(&["noop"], (50_000, 0)), Duration::from_secs(10));
+
+        let (mut parent, _) = agent_with(
+            vec![calls(&["research"], (1, 1)), ends("done", (1, 1))],
+            vec![Box::new(tool::AgentTool::new(
+                "research", "test", MODEL, child,
+            ))],
+        );
+        parent.default_tool_timeout = Duration::from_secs(25);
+
+        let res = parent.run(&MODEL, go()).await.unwrap();
+
+        // 打ち切りまでに完了した 2 回分が計上されていること
+        assert_eq!(res.input_tokens, 1 + 100_000 + 1, "{res:?}");
+    }
+
+    #[tokio::test]
+    async fn tool_calls_beyond_the_per_turn_cap_are_not_run() {
+        let (mut agent, rec) = agent_with(
+            vec![
+                calls(&["sub", "sub", "sub", "sub", "sub"], (1, 1)),
+                ends("done", (1, 1)),
+            ],
+            vec![Box::new(TokenSpendingTool { usage: (100, 100) })],
+        );
+        agent.max_tool_calls_per_turn = 2;
+
+        let res = agent.run(&MODEL, go()).await.unwrap();
+
+        assert_eq!(res.input_tokens, 1 + 100 + 100 + 1);
+        assert_eq!(res.output_tokens, 1 + 100 + 100 + 1);
+
+        let history = rec.last_history.lock().unwrap();
+        let blocks = &history.last().unwrap().content;
+        assert_eq!(blocks.len(), 5);
+        let errors = blocks
+            .iter()
+            .filter(|b| {
+                matches!(b, MessageBlock::ToolResult { is_error, content, .. }
+                    if *is_error && content.contains("TooManyToolCalls"))
+            })
+            .count();
+        assert_eq!(errors, 3);
     }
 
     #[tokio::test(start_paused = true)]

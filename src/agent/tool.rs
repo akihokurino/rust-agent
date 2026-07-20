@@ -20,6 +20,9 @@ pub trait Tool: Send + Sync {
     fn timeout(&self) -> Option<Duration> {
         None
     }
+    /// 親から、このツールが使ってよい残りトークン数を渡される。
+    /// 内部で LLM を回すツールは、この範囲に収めること
+    fn set_token_budget(&self, _remaining: u32) {}
     fn spec(&self) -> Value {
         json!({
             "name": self.name(),
@@ -66,6 +69,8 @@ pub struct AgentTool {
     // Arc で利用ができなくなるので、 AtomicU32 を利用
     input_tokens: AtomicU32,
     output_tokens: AtomicU32,
+    // 親から渡される残り予算。u32::MAX は未設定
+    budget: AtomicU32,
 }
 impl AgentTool {
     pub fn new(
@@ -81,6 +86,7 @@ impl AgentTool {
             sub_agent: agent,
             input_tokens: AtomicU32::new(0),
             output_tokens: AtomicU32::new(0),
+            budget: AtomicU32::new(u32::MAX),
         }
     }
 }
@@ -110,21 +116,26 @@ impl Tool for AgentTool {
             self.output_tokens.swap(0, Ordering::Relaxed),
         )
     }
+    fn set_token_budget(&self, remaining: u32) {
+        self.budget.store(remaining, Ordering::Relaxed);
+    }
     async fn execute(&self, input: Value) -> Result<Value, AgentError> {
         let prompt = input
             .get("prompt")
             .and_then(Value::as_str)
             .ok_or_else(|| Kind::ValidationException.with("prompt is required"))?;
 
+        // 子は自分の max_total_tokens と、親から渡された残り予算の小さい方に従う。
+        // 消費は 1 ターンごとにカウンタへ直接書かれるので、途中で打ち切られても失われない
         let res = self
             .sub_agent
-            .run(&self.model, vec![Input::Text(prompt.to_string())])
+            .run_within(
+                &self.model,
+                vec![Input::Text(prompt.to_string())],
+                self.budget.load(Ordering::Relaxed),
+                Some((&self.input_tokens, &self.output_tokens)),
+            )
             .await?;
-
-        self.input_tokens
-            .fetch_add(res.input_tokens, Ordering::Relaxed);
-        self.output_tokens
-            .fetch_add(res.output_tokens, Ordering::Relaxed);
 
         Ok(json!(res.content))
     }
