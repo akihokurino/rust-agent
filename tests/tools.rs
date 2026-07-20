@@ -80,7 +80,13 @@ async fn agent_tool_usage_starts_at_zero() {
 #[test]
 fn http_tools_cap_themselves_below_the_agent_default() {
     assert_eq!(FetchUrl.timeout(), Some(Duration::from_secs(30)));
-    assert_eq!(WebSearch.timeout(), Some(Duration::from_secs(30)));
+    assert_eq!(
+        WebSearch {
+            serper_api_key: None
+        }
+        .timeout(),
+        Some(Duration::from_secs(30))
+    );
 }
 
 #[test]
@@ -91,9 +97,18 @@ fn http_tools_have_schemas() {
         "string"
     );
 
-    assert_eq!(WebSearch.name(), "web_search");
     assert_eq!(
-        WebSearch.input_schema()["properties"]["query"]["type"],
+        WebSearch {
+            serper_api_key: None
+        }
+        .name(),
+        "web_search"
+    );
+    assert_eq!(
+        WebSearch {
+            serper_api_key: None
+        }
+        .input_schema()["properties"]["query"]["type"],
         "string"
     );
 }

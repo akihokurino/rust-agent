@@ -85,7 +85,9 @@ async fn main() -> anyhow::Result<()> {
         )
         .max_tokens(4096)
         .add_tool(Box::new(FetchUrl))
-        .add_tool(Box::new(WebSearch))
+        .add_tool(Box::new(WebSearch {
+            serper_api_key: std::env::var("SERPER_API_KEY").ok(),
+        }))
         .build()
         .await?;
 

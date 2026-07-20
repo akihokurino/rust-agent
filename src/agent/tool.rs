@@ -1,10 +1,10 @@
+use crate::Input;
 use crate::agent::Agent;
 use crate::types::errors::{AgentError, Kind};
 use crate::types::model::Model;
-use crate::Input;
 use async_trait::async_trait;
 use schemars::JsonSchema;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -136,7 +136,9 @@ struct WebSearchInput {
     query: String,
 }
 #[cfg(feature = "builtin-tools")]
-pub struct WebSearch;
+pub struct WebSearch {
+    pub serper_api_key: Option<String>,
+}
 #[cfg(feature = "builtin-tools")]
 #[async_trait]
 impl Tool for WebSearch {
@@ -154,9 +156,10 @@ impl Tool for WebSearch {
     }
     async fn execute(&self, input: Value) -> Result<Value, AgentError> {
         let args: WebSearchInput = serde_json::from_value(input)?;
-        let api_key = std::env::var("SERPER_API_KEY")
-            .ok()
-            .ok_or_else(|| Kind::ValidationException.with("SERPER_API_KEY is not set"))?;
+        let api_key = self
+            .serper_api_key
+            .as_deref()
+            .ok_or_else(|| Kind::ValidationException.with("serper_api_key is required"))?;
         let resp = reqwest::Client::new()
             .post("https://google.serper.dev/search")
             .header("X-API-KEY", api_key)
@@ -430,6 +433,33 @@ mod tests {
             strip_html("<!-- 消える --><p>Q&amp;A&nbsp;&lt;x&gt;</p>"),
             "Q&A <x>"
         );
+    }
+
+    #[test]
+    fn pathological_markup_always_terminates() {
+        let cases: Vec<String> = vec![
+            "<script></script>".into(),
+            "<script>".into(),
+            "<script></script></script>".into(),
+            "<script><script></script>".into(),
+            "<style></style><style></style>".into(),
+            "<<<<<<<<".into(),
+            "<!--".into(),
+            "<!---->".into(),
+            "<>".into(),
+            "</>".into(),
+            "<script".into(),
+            "</script>".into(),
+            "<SCRIPT></ScRiPt>".into(),
+            "あ<script>い</script>う".into(),
+            "<script>".repeat(1000),
+            "<".repeat(10000),
+            format!("<script>{}</script>", "<".repeat(1000)),
+        ];
+        for c in cases {
+            let out = strip_html(&c);
+            assert!(out.len() <= 50_000);
+        }
     }
 
     #[test]
