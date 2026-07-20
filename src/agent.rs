@@ -345,6 +345,7 @@ impl AgentBuilder {
         self
     }
 
+    /// 1 回のモデル呼び出しが返す出力トークンの上限。入力側は縛らない
     pub fn max_tokens(mut self, tokens: u32) -> Self {
         self.max_tokens = tokens;
         self
@@ -355,6 +356,12 @@ impl AgentBuilder {
         self
     }
 
+    /// 1 回の run で積算してよいトークン数。
+    ///
+    /// 判定はターンの先頭で消費済みトークンに対して行うため、
+    /// 上限そのものではなく「上限 + 1 ターン分」が実効的な天井になる。
+    /// 1 ターン目は消費が 0 なので必ず実行され、単一ターンで終わる run は縛れない。
+    /// 入力の大きさは対象外なので、信頼できない入力を受ける場合は呼び出し側で制限すること
     pub fn max_total_tokens(mut self, tokens: u32) -> Self {
         self.max_total_tokens = tokens;
         self
