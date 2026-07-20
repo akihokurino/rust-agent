@@ -1,5 +1,5 @@
 [package]
-name = "rust_agent"
+name = "rust-agent"
 version = "0.1.0"
 edition = "2024"
 

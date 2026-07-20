@@ -1761,7 +1761,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust_agent"
+name = "rust-agent"
 version = "0.1.0"
 dependencies = [
  "anyhow",
