@@ -6,7 +6,6 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde_json::{Value, json};
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 #[async_trait]
@@ -14,15 +13,9 @@ pub trait Tool: Send + Sync {
     fn name(&self) -> String;
     fn description(&self) -> String;
     fn input_schema(&self) -> Value;
-    fn sub_agent_usage(&self) -> (u32, u32) {
-        (0, 0)
-    }
     fn timeout(&self) -> Option<Duration> {
         None
     }
-    /// 親から、このツールが使ってよい残りトークン数を渡される。
-    /// 内部で LLM を回すツールは、この範囲に収めること
-    fn set_token_budget(&self, _remaining: u32) {}
     fn spec(&self) -> Value {
         json!({
             "name": self.name(),
@@ -30,7 +23,6 @@ pub trait Tool: Send + Sync {
             "input_schema": self.input_schema(),
         })
     }
-    /// ブロッキング処理は `tokio::task::spawn_blocking` に逃がすこと
     async fn execute(&self, input: Value) -> Result<Value, AgentError>;
 }
 
@@ -60,20 +52,14 @@ impl<T: JsonSchema + Send + Sync> Tool for RespondTool<T> {
     }
 }
 
-pub struct AgentTool {
+pub(crate) struct AgentTool {
     name: String,
     description: String,
     model: Model,
     sub_agent: Agent,
-    // ここを可変にするには AgentTool -> tools -> Agent もミュータブルにする必要があり、
-    // Arc で利用ができなくなるので、 AtomicU32 を利用
-    input_tokens: AtomicU32,
-    output_tokens: AtomicU32,
-    // 親から渡される残り予算。u32::MAX は未設定
-    budget: AtomicU32,
 }
 impl AgentTool {
-    pub fn new(
+    pub(crate) fn new(
         name: impl Into<String>,
         description: impl Into<String>,
         model: Model,
@@ -84,9 +70,6 @@ impl AgentTool {
             description: description.into(),
             model,
             sub_agent: agent,
-            input_tokens: AtomicU32::new(0),
-            output_tokens: AtomicU32::new(0),
-            budget: AtomicU32::new(u32::MAX),
         }
     }
 }
@@ -110,31 +93,15 @@ impl Tool for AgentTool {
             "required": ["prompt"],
         })
     }
-    fn sub_agent_usage(&self) -> (u32, u32) {
-        (
-            self.input_tokens.swap(0, Ordering::Relaxed),
-            self.output_tokens.swap(0, Ordering::Relaxed),
-        )
-    }
-    fn set_token_budget(&self, remaining: u32) {
-        self.budget.store(remaining, Ordering::Relaxed);
-    }
     async fn execute(&self, input: Value) -> Result<Value, AgentError> {
         let prompt = input
             .get("prompt")
             .and_then(Value::as_str)
             .ok_or_else(|| Kind::ValidationException.with("prompt is required"))?;
 
-        // 子は自分の max_total_tokens と、親から渡された残り予算の小さい方に従う。
-        // 消費は 1 ターンごとにカウンタへ直接書かれるので、途中で打ち切られても失われない
         let res = self
             .sub_agent
-            .run_within(
-                &self.model,
-                vec![Input::Text(prompt.to_string())],
-                self.budget.load(Ordering::Relaxed),
-                Some((&self.input_tokens, &self.output_tokens)),
-            )
+            .run(&self.model, vec![Input::Text(prompt.to_string())])
             .await?;
 
         Ok(json!(res.content))
@@ -476,5 +443,46 @@ mod tests {
     #[test]
     fn handles_unclosed_tag() {
         assert_eq!(strip_html("<p>本文<broken"), "本文");
+    }
+}
+
+#[cfg(test)]
+mod agent_tool_tests {
+    use super::*;
+
+    async fn agent_tool() -> AgentTool {
+        let sub = Agent::builder().build().await.unwrap();
+        AgentTool::new(
+            "research",
+            "詳しく調べる",
+            Model::BedrockClaudeSonnet46,
+            sub,
+        )
+    }
+
+    #[tokio::test]
+    async fn exposes_a_prompt_and_nothing_else() {
+        let t = agent_tool().await;
+
+        assert_eq!(t.name(), "research");
+        assert_eq!(t.description(), "詳しく調べる");
+
+        let schema = t.input_schema();
+        assert_eq!(schema["required"], json!(["prompt"]));
+        assert_eq!(schema["properties"].as_object().unwrap().keys().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn rejects_a_missing_or_non_string_prompt() {
+        let t = agent_tool().await;
+
+        assert_eq!(
+            t.execute(json!({})).await.unwrap_err().kind,
+            Kind::ValidationException
+        );
+        assert_eq!(
+            t.execute(json!({ "prompt": 42 })).await.unwrap_err().kind,
+            Kind::ValidationException
+        );
     }
 }

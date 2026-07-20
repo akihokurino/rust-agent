@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use rust_agent::{Agent, AgentError, AgentTool, FetchUrl, Kind, Model, Tool, WebSearch};
+use rust_agent::{AgentError, FetchUrl, Kind, Tool, WebSearch};
 use serde_json::{Value, json};
 use std::time::Duration;
 
@@ -34,47 +34,8 @@ fn spec_is_the_shape_bedrock_expects() {
 }
 
 #[test]
-fn a_plain_tool_reports_no_usage_and_no_timeout() {
-    assert_eq!(Minimal.sub_agent_usage(), (0, 0));
+fn a_plain_tool_has_no_timeout_of_its_own() {
     assert_eq!(Minimal.timeout(), None);
-}
-
-async fn agent_tool() -> AgentTool {
-    let sub = Agent::builder().build().await.unwrap();
-    AgentTool::new(
-        "research",
-        "詳しく調べる",
-        Model::BedrockClaudeSonnet46,
-        sub,
-    )
-}
-
-#[tokio::test]
-async fn agent_tool_exposes_a_prompt_and_nothing_else() {
-    let t = agent_tool().await;
-
-    assert_eq!(t.name(), "research");
-    assert_eq!(t.description(), "詳しく調べる");
-
-    let schema = t.input_schema();
-    assert_eq!(schema["required"], json!(["prompt"]));
-    assert_eq!(schema["properties"].as_object().unwrap().keys().len(), 1);
-}
-
-#[tokio::test]
-async fn agent_tool_rejects_a_missing_or_non_string_prompt() {
-    let t = agent_tool().await;
-
-    let e = t.execute(json!({})).await.unwrap_err();
-    assert_eq!(e.kind, Kind::ValidationException);
-
-    let e = t.execute(json!({ "prompt": 42 })).await.unwrap_err();
-    assert_eq!(e.kind, Kind::ValidationException);
-}
-
-#[tokio::test]
-async fn agent_tool_usage_starts_at_zero() {
-    assert_eq!(agent_tool().await.sub_agent_usage(), (0, 0));
 }
 
 #[test]

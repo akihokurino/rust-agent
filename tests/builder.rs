@@ -7,9 +7,7 @@ async fn defaults() {
 
     assert_eq!(a.system_prompt, "");
     assert_eq!(a.max_tokens, 1024);
-    assert_eq!(a.max_turns, 10);
     assert_eq!(a.max_total_tokens, 500_000);
-    assert_eq!(a.max_tool_calls_per_turn, 8);
     assert_eq!(a.default_tool_timeout, Duration::from_secs(60));
     assert!(a.tools.is_empty());
 }
@@ -19,9 +17,7 @@ async fn overrides_are_applied() {
     let a = Agent::builder()
         .system_prompt("あなたは調査エージェントです")
         .max_tokens(4096)
-        .max_turns(3)
         .max_total_tokens(50_000)
-        .max_tool_calls_per_turn(3)
         .default_tool_timeout(Duration::from_secs(5))
         .use_models(vec![Model::BedrockClaudeSonnet46])
         .build()
@@ -30,9 +26,7 @@ async fn overrides_are_applied() {
 
     assert_eq!(a.system_prompt, "あなたは調査エージェントです");
     assert_eq!(a.max_tokens, 4096);
-    assert_eq!(a.max_turns, 3);
     assert_eq!(a.max_total_tokens, 50_000);
-    assert_eq!(a.max_tool_calls_per_turn, 3);
     assert_eq!(a.default_tool_timeout, Duration::from_secs(5));
 }
 
