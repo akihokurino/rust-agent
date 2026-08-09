@@ -54,9 +54,12 @@ tokio::task_local! {
 
 const MAX_TOOL_CALLS_PER_TURN: u32 = 10;
 const MAX_TURNS: u32 = 10;
+const MAX_TOKENS: u32 = 1024;
+const MAX_TOTAL_TOKENS: u32 = 500_000;
 
 pub struct Agent {
     pub system_prompt: String,
+    pub max_turns: u32,
     pub max_tokens: u32,
     pub max_total_tokens: u32,
     pub default_tool_timeout: Duration,
@@ -100,7 +103,7 @@ impl Agent {
 
         loop {
             // 異常時のために最大試行回数を決めておく
-            if turns >= MAX_TURNS {
+            if turns >= self.max_turns {
                 return Err(Kind::MaxTurnsExceeded.default());
             }
 
@@ -304,6 +307,7 @@ impl Agent {
 
 pub struct AgentBuilder {
     system_prompt: String,
+    max_turns: u32,
     max_tokens: u32,
     max_total_tokens: u32,
     default_tool_timeout: Duration,
@@ -315,8 +319,9 @@ impl Default for AgentBuilder {
     fn default() -> Self {
         Self {
             system_prompt: String::new(),
-            max_tokens: 1024,
-            max_total_tokens: 500_000,
+            max_turns: MAX_TURNS,
+            max_tokens: MAX_TOKENS,
+            max_total_tokens: MAX_TOTAL_TOKENS,
             default_tool_timeout: Duration::from_secs(60),
             tools: Vec::new(),
             use_models: vec![Model::BedrockClaudeSonnet46],
@@ -326,6 +331,12 @@ impl Default for AgentBuilder {
 impl AgentBuilder {
     pub fn system_prompt(mut self, prompt: impl Into<String>) -> Self {
         self.system_prompt = prompt.into();
+        self
+    }
+
+    /// 1 回の Agent 実行における最大ターン数
+    pub fn max_turns(mut self, turns: u32) -> Self {
+        self.max_turns = turns;
         self
     }
 
@@ -367,6 +378,22 @@ impl AgentBuilder {
         self
     }
 
+    pub fn add_nested_agent(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        model: Model,
+        sub_agent: Agent,
+    ) -> Self {
+        self.tools.push(Box::new(tool::AgentTool::new(
+            name,
+            description,
+            model,
+            sub_agent,
+        )));
+        self
+    }
+
     pub fn use_models(mut self, models: Vec<Model>) -> Self {
         self.use_models = models;
         self
@@ -388,6 +415,7 @@ impl AgentBuilder {
 
         Ok(Agent {
             system_prompt: self.system_prompt,
+            max_turns: self.max_turns,
             max_tokens: self.max_tokens,
             max_total_tokens: self.max_total_tokens,
             default_tool_timeout: self.default_tool_timeout,
@@ -558,6 +586,7 @@ mod tests {
 
         let agent = Agent {
             system_prompt: String::new(),
+            max_turns: MAX_TURNS,
             max_tokens: 1024,
             max_total_tokens: u32::MAX,
             default_tool_timeout: Duration::from_secs(60),
