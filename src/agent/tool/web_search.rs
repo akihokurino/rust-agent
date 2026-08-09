@@ -14,11 +14,11 @@ pub struct WebSearch {
 }
 #[async_trait]
 impl Tool for WebSearch {
-    fn name(&self) -> String {
-        "web_search".into()
+    fn name(&self) -> &str {
+        "web_search"
     }
-    fn description(&self) -> String {
-        "Google検索を行い、検索結果を取得します。".into()
+    fn description(&self) -> &str {
+        "Google検索を行い、検索結果を取得します。"
     }
     fn input_schema(&self) -> Value {
         serde_json::to_value(schemars::schema_for!(WebSearchInput)).unwrap()

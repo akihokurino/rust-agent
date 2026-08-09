@@ -44,7 +44,7 @@ impl LLM for Adapter {
         tools: &[&dyn agent::tool::Tool],
         tool_choice: &ToolChoice,
     ) -> Result<crate::types::agent::InvokeResult, AgentError> {
-        let messages: Vec<types::Message> = messages.iter().map(|m| m.clone().into()).collect();
+        let messages: Vec<types::Message> = messages.iter().map(Into::into).collect();
         let mut body = json!({
             "anthropic_version": "bedrock-2023-05-31",
             "system": system_prompt,

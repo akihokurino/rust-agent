@@ -135,11 +135,11 @@ struct SlowTool {
 }
 #[async_trait]
 impl tool::Tool for SlowTool {
-    fn name(&self) -> String {
-        self.name.into()
+    fn name(&self) -> &str {
+        self.name
     }
-    fn description(&self) -> String {
-        "test".into()
+    fn description(&self) -> &str {
+        "test"
     }
     fn input_schema(&self) -> Value {
         json!({ "type": "object" })
@@ -350,11 +350,11 @@ async fn a_tool_timeout_overrides_the_agent_default() {
     struct Impatient;
     #[async_trait]
     impl tool::Tool for Impatient {
-        fn name(&self) -> String {
-            "hang".into()
+        fn name(&self) -> &str {
+            "hang"
         }
-        fn description(&self) -> String {
-            "test".into()
+        fn description(&self) -> &str {
+            "test"
         }
         fn input_schema(&self) -> Value {
             json!({ "type": "object" })

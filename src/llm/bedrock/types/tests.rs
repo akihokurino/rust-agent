@@ -2,16 +2,17 @@ use super::*;
 use serde_json::json;
 
 fn to_json(b: types::MessageBlock) -> serde_json::Value {
-    serde_json::to_value(MessageBlock::from(b)).unwrap()
+    serde_json::to_value(MessageBlock::from(&b)).unwrap()
 }
 
 #[test]
 fn roles_are_lowercase() {
-    let m: Message = types::Message::user(vec![]).into();
+    let user = types::Message::user(vec![]);
+    let m: Message = (&user).into();
     assert_eq!(serde_json::to_value(&m).unwrap()["role"], "user");
 
     let m = Message {
-        role: types::Role::Assistant.into(),
+        role: (&types::Role::Assistant).into(),
         content: vec![],
     };
     assert_eq!(serde_json::to_value(&m).unwrap()["role"], "assistant");

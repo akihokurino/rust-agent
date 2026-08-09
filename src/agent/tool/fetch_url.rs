@@ -17,11 +17,11 @@ pub struct FetchUrl;
 const MAX_REDIRECTS: usize = 5;
 #[async_trait]
 impl Tool for FetchUrl {
-    fn name(&self) -> String {
-        "fetch_url".into()
+    fn name(&self) -> &str {
+        "fetch_url"
     }
-    fn description(&self) -> String {
-        "指定されたURLのWebページ本文を取得します。企業の公式サイト等の情報収集に使います。".into()
+    fn description(&self) -> &str {
+        "指定されたURLのWebページ本文を取得します。企業の公式サイト等の情報収集に使います。"
     }
     fn input_schema(&self) -> Value {
         serde_json::to_value(schemars::schema_for!(FetchUrlInput)).unwrap()
@@ -93,13 +93,12 @@ async fn guarded_client(url: &str) -> Result<(reqwest::Client, reqwest::Url), Ag
         .host_str()
         .ok_or_else(|| Kind::ValidationException.with("url has no host"))?
         .trim_start_matches('[')
-        .trim_end_matches(']')
-        .to_string();
+        .trim_end_matches(']');
     let port = parsed
         .port_or_known_default()
         .ok_or_else(|| Kind::ValidationException.with("url has no port"))?;
 
-    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), port))
+    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host, port))
         .await
         .map_err(Kind::ValidationException.from_srcf())?
         .collect();
@@ -116,7 +115,7 @@ async fn guarded_client(url: &str) -> Result<(reqwest::Client, reqwest::Url), Ag
     }
 
     let client = reqwest::Client::builder()
-        .resolve(&host, addr)
+        .resolve(host, addr)
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(20))
         .build()

@@ -7,11 +7,11 @@ struct Minimal;
 
 #[async_trait]
 impl Tool for Minimal {
-    fn name(&self) -> String {
-        "minimal".into()
+    fn name(&self) -> &str {
+        "minimal"
     }
-    fn description(&self) -> String {
-        "説明".into()
+    fn description(&self) -> &str {
+        "説明"
     }
     fn input_schema(&self) -> Value {
         json!({ "type": "object" })

@@ -47,7 +47,7 @@ async fn tools_keep_their_registration_order() {
         .await
         .unwrap();
 
-    let names: Vec<String> = a.tools.iter().map(|t| t.name()).collect();
+    let names: Vec<&str> = a.tools.iter().map(|t| t.name()).collect();
     assert_eq!(names, ["a", "b"]);
 }
 
@@ -68,11 +68,11 @@ mod tools {
 
     #[async_trait]
     impl Tool for Named {
-        fn name(&self) -> String {
-            self.0.into()
+        fn name(&self) -> &str {
+            self.0
         }
-        fn description(&self) -> String {
-            "test".into()
+        fn description(&self) -> &str {
+            "test"
         }
         fn input_schema(&self) -> Value {
             json!({ "type": "object" })

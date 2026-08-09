@@ -17,8 +17,8 @@ use std::time::Duration;
 
 #[async_trait]
 pub trait Tool: Send + Sync {
-    fn name(&self) -> String;
-    fn description(&self) -> String;
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
     fn input_schema(&self) -> Value;
     fn timeout(&self) -> Option<Duration> {
         None
@@ -45,11 +45,11 @@ impl<T> RespondTool<T> {
 }
 #[async_trait]
 impl<T: JsonSchema + Send + Sync> Tool for RespondTool<T> {
-    fn name(&self) -> String {
-        "respond".into()
+    fn name(&self) -> &str {
+        "respond"
     }
-    fn description(&self) -> String {
-        "最終的な構造化された回答を返す".into()
+    fn description(&self) -> &str {
+        "最終的な構造化された回答を返す"
     }
     fn input_schema(&self) -> Value {
         serde_json::to_value(schemars::schema_for!(T)).unwrap()
@@ -82,11 +82,11 @@ impl AgentTool {
 }
 #[async_trait]
 impl Tool for AgentTool {
-    fn name(&self) -> String {
-        self.name.clone()
+    fn name(&self) -> &str {
+        &self.name
     }
-    fn description(&self) -> String {
-        self.description.clone()
+    fn description(&self) -> &str {
+        &self.description
     }
     fn input_schema(&self) -> Value {
         json!({

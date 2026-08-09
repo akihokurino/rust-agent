@@ -195,7 +195,9 @@ impl Agent {
                     continue;
                 }
 
-                let tool = tool_map.get(&name).ok_or(Kind::ToolNotFound.default())?;
+                let tool = tool_map
+                    .get(name.as_str())
+                    .ok_or(Kind::ToolNotFound.default())?;
 
                 // Future を直接配列にいれることで id, name, input, tool の借用をなくし（ move ）、ループの外で実行可能にする
                 tasks.push(async move {
@@ -323,12 +325,12 @@ impl Agent {
                     .iter()
                     .find_map(|b| match b {
                         ResultBlock::ToolUse { name, input, .. } if name == "respond" => {
-                            Some(input.clone())
+                            Some(input)
                         }
                         _ => None,
                     })
                     .map(|input| {
-                        serde_json::from_value(input)
+                        T::deserialize(input)
                             .map(|v| (v, false))
                             .map_err(Into::into)
                     })

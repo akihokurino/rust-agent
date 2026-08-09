@@ -6,9 +6,9 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
-pub struct Message {
+pub struct Message<'a> {
     pub role: Role,
-    pub content: Vec<MessageBlock>,
+    pub content: Vec<MessageBlock<'a>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -20,18 +20,18 @@ pub enum Role {
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum MessageBlock {
+pub enum MessageBlock<'a> {
     Text {
-        text: String,
+        text: &'a str,
     },
     ToolUse {
-        id: String,
-        name: String,
-        input: serde_json::Value,
+        id: &'a str,
+        name: &'a str,
+        input: &'a serde_json::Value,
     },
     ToolResult {
-        tool_use_id: String,
-        content: String,
+        tool_use_id: &'a str,
+        content: &'a str,
         is_error: bool,
     },
     Document {
@@ -47,17 +47,17 @@ pub struct DocumentSource {
     data: String,
 }
 
-impl From<types::Message> for Message {
-    fn from(m: types::Message) -> Self {
+impl<'a> From<&'a types::Message> for Message<'a> {
+    fn from(m: &'a types::Message) -> Self {
         Message {
-            role: m.role.into(),
-            content: m.content.into_iter().map(Into::into).collect(),
+            role: (&m.role).into(),
+            content: m.content.iter().map(Into::into).collect(),
         }
     }
 }
 
-impl From<types::Role> for Role {
-    fn from(r: types::Role) -> Self {
+impl From<&types::Role> for Role {
+    fn from(r: &types::Role) -> Self {
         match r {
             types::Role::User => Role::User,
             types::Role::Assistant => Role::Assistant,
@@ -65,8 +65,8 @@ impl From<types::Role> for Role {
     }
 }
 
-impl From<types::MessageBlock> for MessageBlock {
-    fn from(b: types::MessageBlock) -> Self {
+impl<'a> From<&'a types::MessageBlock> for MessageBlock<'a> {
+    fn from(b: &'a types::MessageBlock) -> Self {
         match b {
             types::MessageBlock::Text { text } => MessageBlock::Text { text },
             types::MessageBlock::ToolUse { id, name, input } => {
@@ -79,7 +79,7 @@ impl From<types::MessageBlock> for MessageBlock {
             } => MessageBlock::ToolResult {
                 tool_use_id,
                 content,
-                is_error,
+                is_error: *is_error,
             },
             types::MessageBlock::Pdf { data } => MessageBlock::Document {
                 source: DocumentSource {
