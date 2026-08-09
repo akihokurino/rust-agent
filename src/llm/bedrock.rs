@@ -2,8 +2,8 @@ mod types;
 
 use crate::agent;
 use crate::agent::llm::LLM;
-use crate::agent::types::ToolChoice;
 use crate::llm::bedrock::types::InvokeResponse;
+use crate::types::agent::ToolChoice;
 use crate::types::errors::{AgentError, Kind};
 use crate::types::model::Model;
 use async_trait::async_trait;
@@ -40,10 +40,10 @@ impl LLM for Adapter {
         model: &Model,
         system_prompt: &str,
         max_tokens: u32,
-        messages: &[agent::types::Message],
+        messages: &[crate::types::agent::Message],
         tools: &[&dyn agent::tool::Tool],
         tool_choice: &ToolChoice,
-    ) -> Result<agent::types::InvokeResult, AgentError> {
+    ) -> Result<crate::types::agent::InvokeResult, AgentError> {
         let messages: Vec<types::Message> = messages.iter().map(|m| m.clone().into()).collect();
         let mut body = json!({
             "anthropic_version": "bedrock-2023-05-31",

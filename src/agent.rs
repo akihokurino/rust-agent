@@ -1,6 +1,8 @@
-use crate::agent::types::{Message, MessageBlock, ResultBlock, StopReason, ToolChoice};
 use crate::llm::bedrock;
 use crate::types::agent::AgentResult;
+use crate::types::agent::{
+    InvokeResult, Message, MessageBlock, ResultBlock, StopReason, ToolChoice,
+};
 use crate::types::errors::AgentError;
 use crate::types::errors::Kind::ValidationException;
 use crate::types::model::Model;
@@ -14,7 +16,6 @@ use std::time::Duration;
 
 pub mod llm;
 pub mod tool;
-pub mod types;
 
 // 1 回の run が使ってよいトークン上限と、全体の input, output 消費量
 // ルートで 1 つ作り、サブエージェントも同じものを加算・参照する
@@ -75,9 +76,10 @@ impl Agent {
         &self,
         model: &Model,
         input: Vec<Input>,
+        prev_history: Vec<Message>,
         system: &str,
         tool_refs: &[&dyn tool::Tool],
-        finish: impl Fn(&types::InvokeResult) -> Option<Result<O, AgentError>>,
+        finish: impl Fn(&InvokeResult) -> Option<Result<(O, bool), AgentError>>,
     ) -> Result<AgentResult<O>, AgentError> {
         // 指定モデルから利用する LLM アダプターを決定
         let llm = self.providers.get(model).ok_or(Kind::ModelNotConfigured)?;
@@ -94,7 +96,10 @@ impl Agent {
         let started = budget.usage();
 
         let content: Vec<MessageBlock> = input.into_iter().map(Into::into).collect();
-        let mut history = vec![Message::user(content)];
+        let mut history = prev_history
+            .into_iter()
+            .chain([Message::user(content)])
+            .collect::<Vec<_>>();
         let mut turns: u32 = 0;
         let mut tool_choice = ToolChoice::Auto;
 
@@ -129,9 +134,17 @@ impl Agent {
             // 完了条件を満たすか検証する
             // 満たしていた場合はそこで結果を返す
             if let Some(result) = finish(&res) {
+                // 最終ターンの場合はここで終了するので、最後の回答を history につめる
+                // ただし、構造化出力の場合は最終回答は respond ツールへのリクエストの形なので、この場合はhistoryに含めない
+                let (result, is_include_last_message) = result?;
+                if is_include_last_message {
+                    history.push(res.into());
+                }
+
                 let (input, output) = budget.usage();
                 return Ok(AgentResult {
-                    content: result?,
+                    content: result,
+                    history,
                     input_tokens: input - started.0,
                     output_tokens: output - started.1,
                 });
@@ -247,11 +260,17 @@ impl Agent {
         &self,
         model: &Model,
         input: Vec<Input>,
+        history: Option<Vec<Message>>,
     ) -> Result<AgentResult<String>, AgentError> {
         let tool_refs: Vec<&dyn tool::Tool> = self.tools.iter().map(|t| t.as_ref()).collect();
 
-        self.with_budget(
-            self.loop_call(model, input, &self.system_prompt, &tool_refs, |res| {
+        self.with_budget(self.loop_call(
+            model,
+            input,
+            history.unwrap_or_default(),
+            &self.system_prompt,
+            &tool_refs,
+            |res| {
                 // ToolUse でない場合は完了とする
                 (!matches!(res.stop_reason, StopReason::ToolUse)).then(|| {
                     let text = res
@@ -263,10 +282,10 @@ impl Agent {
                         })
                         .collect::<Vec<_>>()
                         .join("");
-                    Ok(text)
+                    Ok((text, true))
                 })
-            }),
-        )
+            },
+        ))
         .await
     }
 
@@ -274,6 +293,7 @@ impl Agent {
         &self,
         model: &Model,
         input: Vec<Input>,
+        history: Option<Vec<Message>>,
     ) -> Result<AgentResult<T>, AgentError>
     where
         T: serde::de::DeserializeOwned + schemars::JsonSchema + Send + Sync + 'static,
@@ -288,19 +308,30 @@ impl Agent {
             self.system_prompt
         );
 
-        self.with_budget(self.loop_call(model, input, &system, &tool_refs, |res| {
-            // ToolUse で respond を指定している場合のみ完了とする
-            // struct output では respond ツールの input スキーマを生成させ、それを最終出力に利用する
-            res.content
-                .iter()
-                .find_map(|b| match b {
-                    ResultBlock::ToolUse { name, input, .. } if name == "respond" => {
-                        Some(input.clone())
-                    }
-                    _ => None,
-                })
-                .map(|input| serde_json::from_value(input).map_err(Into::into))
-        }))
+        self.with_budget(self.loop_call(
+            model,
+            input,
+            history.unwrap_or_default(),
+            &system,
+            &tool_refs,
+            |res| {
+                // ToolUse で respond を指定している場合のみ完了とする
+                // struct output では respond ツールの input スキーマを生成させ、それを最終出力に利用する
+                res.content
+                    .iter()
+                    .find_map(|b| match b {
+                        ResultBlock::ToolUse { name, input, .. } if name == "respond" => {
+                            Some(input.clone())
+                        }
+                        _ => None,
+                    })
+                    .map(|input| {
+                        serde_json::from_value(input)
+                            .map(|v| (v, false))
+                            .map_err(Into::into)
+                    })
+            },
+        ))
         .await
     }
 }
@@ -470,7 +501,7 @@ impl SubAgentBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::types::{InvokeResult, Usage};
+    use crate::types::agent::{InvokeResult, Role, Usage};
     use async_trait::async_trait;
     use serde_json::{Value, json};
     use std::collections::VecDeque;
@@ -632,7 +663,7 @@ mod tests {
     async fn max_turns_stops_an_llm_that_keeps_calling_tools() {
         let (agent, rec) = agent_with(vec![calls(&["noop"], (1, 1))], vec![instant("noop")]);
 
-        let err = agent.run(&MODEL, go()).await.unwrap_err();
+        let err = agent.run(&MODEL, go(), None).await.unwrap_err();
 
         assert_eq!(err.kind, Kind::MaxTurnsExceeded);
         assert_eq!(rec.calls.load(Ordering::Relaxed), MAX_TURNS);
@@ -643,7 +674,7 @@ mod tests {
         let (mut agent, rec) = agent_with(vec![calls(&["noop"], (100, 50))], vec![instant("noop")]);
         agent.max_total_tokens = 300;
 
-        let err = agent.run(&MODEL, go()).await.unwrap_err();
+        let err = agent.run(&MODEL, go(), None).await.unwrap_err();
 
         assert_eq!(err.kind, Kind::TokenBudgetExceeded);
         assert_eq!(rec.calls.load(Ordering::Relaxed), 2);
@@ -654,7 +685,7 @@ mod tests {
         let (mut agent, _) = agent_with(vec![ends("答え", (1000, 1000))], vec![]);
         agent.max_total_tokens = 10;
 
-        let res = agent.run(&MODEL, go()).await.unwrap();
+        let res = agent.run(&MODEL, go(), None).await.unwrap();
 
         assert_eq!(res.content, "答え");
         assert_eq!(res.input_tokens + res.output_tokens, 2000);
@@ -665,7 +696,7 @@ mod tests {
         let (agent, _) = agent_with(vec![calls(&["nope"], (1, 1))], vec![]);
 
         assert_eq!(
-            agent.run(&MODEL, go()).await.unwrap_err().kind,
+            agent.run(&MODEL, go(), None).await.unwrap_err().kind,
             Kind::ToolNotFound
         );
     }
@@ -681,7 +712,7 @@ mod tests {
             ))],
         );
 
-        let res = parent.run(&MODEL, go()).await.unwrap();
+        let res = parent.run(&MODEL, go(), None).await.unwrap();
 
         assert_eq!(res.input_tokens, 10 + 700 + 1);
         assert_eq!(res.output_tokens, 5 + 300 + 2);
@@ -718,7 +749,7 @@ mod tests {
         );
         parent.max_total_tokens = 500;
 
-        let err = parent.run(&MODEL, go()).await.unwrap_err();
+        let err = parent.run(&MODEL, go(), None).await.unwrap_err();
         assert_eq!(err.kind, Kind::TokenBudgetExceeded);
 
         // 子は自分の上限ではなく、親の予算で止まっている
@@ -739,7 +770,7 @@ mod tests {
         );
         parent.default_tool_timeout = Duration::from_secs(25);
 
-        let res = parent.run(&MODEL, go()).await.unwrap();
+        let res = parent.run(&MODEL, go(), None).await.unwrap();
 
         // 打ち切りまでに完了した 2 回分が計上されていること
         assert_eq!(res.input_tokens, 1 + 100_000 + 1, "{res:?}");
@@ -754,7 +785,7 @@ mod tests {
             vec![instant("sub")],
         );
 
-        agent.run(&MODEL, go()).await.unwrap();
+        agent.run(&MODEL, go(), None).await.unwrap();
 
         let history = rec.last_history.lock().unwrap();
         let blocks = &history.last().unwrap().content;
@@ -783,7 +814,7 @@ mod tests {
         );
 
         let start = tokio::time::Instant::now();
-        agent.run(&MODEL, go()).await.unwrap();
+        agent.run(&MODEL, go(), None).await.unwrap();
         let elapsed = start.elapsed();
 
         assert!(elapsed >= Duration::from_secs(3), "{elapsed:?}");
@@ -801,7 +832,7 @@ mod tests {
         );
         agent.default_tool_timeout = Duration::from_millis(50);
 
-        let res = agent.run(&MODEL, go()).await.unwrap();
+        let res = agent.run(&MODEL, go(), None).await.unwrap();
         assert_eq!(res.content, "諦めます");
 
         let history = rec.last_history.lock().unwrap();
@@ -846,7 +877,7 @@ mod tests {
         agent.default_tool_timeout = Duration::from_secs(600);
 
         let start = tokio::time::Instant::now();
-        agent.run(&MODEL, go()).await.unwrap();
+        agent.run(&MODEL, go(), None).await.unwrap();
 
         assert!(
             start.elapsed() < Duration::from_secs(1),
@@ -870,7 +901,7 @@ mod tests {
             vec![],
         );
 
-        let res = agent.run_typed::<Answer>(&MODEL, go()).await.unwrap();
+        let res = agent.run_typed::<Answer>(&MODEL, go(), None).await.unwrap();
 
         assert_eq!(res.content.pref, "東京");
         assert_eq!(*rec.tool_choices.lock().unwrap(), ["auto", "respond"]);
@@ -888,11 +919,85 @@ mod tests {
 
         assert_eq!(
             agent
-                .run_typed::<Answer>(&MODEL, go())
+                .run_typed::<Answer>(&MODEL, go(), None)
                 .await
                 .unwrap_err()
                 .kind,
             Kind::UnknownException
         );
+    }
+
+    #[tokio::test]
+    async fn passed_in_history_precedes_the_new_message() {
+        let (agent, rec) = agent_with(vec![ends("答え", (1, 1))], vec![]);
+
+        let prior = vec![
+            Message::user(vec![MessageBlock::Text {
+                text: "前の質問".into(),
+            }]),
+            Message {
+                role: Role::Assistant,
+                content: vec![MessageBlock::Text {
+                    text: "前の答え".into(),
+                }],
+            },
+        ];
+
+        agent.run(&MODEL, go(), Some(prior)).await.unwrap();
+
+        let seen = rec.last_history.lock().unwrap();
+        assert_eq!(seen.len(), 3);
+        assert_eq!(seen[0].role, Role::User);
+        assert_eq!(seen[1].role, Role::Assistant);
+        assert_eq!(
+            seen[2].content,
+            go().into_iter().map(Into::into).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn the_returned_history_carries_the_whole_conversation() {
+        let (agent, _) = agent_with(vec![ends("答え", (1, 1))], vec![]);
+
+        let res = agent.run(&MODEL, go(), None).await.unwrap();
+
+        assert_eq!(res.history.len(), 2);
+        assert_eq!(res.history[0].role, Role::User);
+        assert_eq!(res.history[1].role, Role::Assistant);
+    }
+
+    #[tokio::test]
+    async fn a_structured_answer_is_not_left_in_the_returned_history() {
+        #[derive(serde::Deserialize, schemars::JsonSchema)]
+        struct Answer {
+            pref: String,
+        }
+
+        let (agent, _) = agent_with(vec![responds(json!({ "pref": "東京" }))], vec![]);
+
+        let res = agent.run_typed::<Answer>(&MODEL, go(), None).await.unwrap();
+
+        assert_eq!(res.content.pref, "東京");
+        let dangling = res
+            .history
+            .iter()
+            .flat_map(|m| &m.content)
+            .any(|b| matches!(b, MessageBlock::ToolUse { name, .. } if name == "respond"));
+        assert!(
+            !dangling,
+            "respond の tool_use が履歴に残っている: {:?}",
+            res.history
+        );
+    }
+
+    #[tokio::test]
+    async fn a_custom_max_turns_is_respected() {
+        let (mut agent, rec) = agent_with(vec![calls(&["noop"], (1, 1))], vec![instant("noop")]);
+        agent.max_turns = 3;
+
+        let err = agent.run(&MODEL, go(), None).await.unwrap_err();
+
+        assert_eq!(err.kind, Kind::MaxTurnsExceeded);
+        assert_eq!(rec.calls.load(Ordering::Relaxed), 3);
     }
 }

@@ -106,7 +106,7 @@ impl Tool for AgentTool {
 
         let res = self
             .sub_agent
-            .run(&self.model, vec![Input::Text(prompt.to_string())])
+            .run(&self.model, vec![Input::Text(prompt.to_string())], None)
             .await?;
 
         Ok(json!(res.content))

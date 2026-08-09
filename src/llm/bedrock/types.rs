@@ -1,4 +1,4 @@
-use crate::agent::types;
+use crate::types::agent as types;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 

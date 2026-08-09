@@ -97,6 +97,7 @@ async fn main() -> anyhow::Result<()> {
             vec![Input::Text(
                 "次の会社URLから会社情報を抽出してください: https://www.cybozu.co.jp/".into(),
             )],
+            None,
         )
         .await?;
     println!("[company] {:#?}", company);
@@ -129,6 +130,7 @@ async fn main() -> anyhow::Result<()> {
                 Input::Pdf(pdf),
                 Input::Text("添付の職務経歴書PDFから career 情報を抽出してください。".into()),
             ],
+            None,
         )
         .await?;
     println!("[career] {:#?}", career);

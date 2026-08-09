@@ -1,6 +1,6 @@
 use crate::agent::tool::Tool;
-use crate::agent::types;
-use crate::agent::types::ToolChoice;
+use crate::types::agent as types;
+use crate::types::agent::ToolChoice;
 use crate::types::errors::AgentError;
 use crate::types::model::Model;
 use async_trait::async_trait;
