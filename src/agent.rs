@@ -97,6 +97,8 @@ impl Agent {
             .map_err(|_| Kind::TokenBudgetExceeded.with("no budget in scope"))?;
         let started = budget.usage();
 
+        tracing::info!(model = %model, tools = tool_refs.len(), budget = budget.limit, "[agent] start");
+
         let content: Vec<MessageBlock> = input.into_iter().map(Into::into).collect();
         let mut history = prev_history
             .into_iter()
@@ -111,16 +113,21 @@ impl Agent {
         loop {
             // 異常時のために最大試行回数を決めておく
             if turns >= self.max_turns {
+                tracing::warn!(max = self.max_turns, "[agent] max turns exceeded");
                 return Err(Kind::MaxTurnsExceeded.default());
             }
 
             // ターン数だけでは1ターンあたりのツール呼び出し数で消費が積み上がるため、トークン量でも上限を設ける
-            budget.valid()?;
+            if let Err(e) = budget.valid() {
+                tracing::warn!(err = %e, "[agent] token budget exceeded");
+                return Err(e);
+            }
 
             turns += 1;
+            tracing::info!(turn = turns, max = self.max_turns, "[agent] turn");
 
             // LLM 実行
-            let res = llm
+            let res = match llm
                 .invoke(
                     model,
                     system,
@@ -129,9 +136,25 @@ impl Agent {
                     tool_refs,
                     &tool_choice,
                 )
-                .await?;
+                .await
+            {
+                Ok(res) => res,
+                Err(e) => {
+                    tracing::warn!(err = %e, "[llm] invoke failed");
+                    return Err(e);
+                }
+            };
 
             budget.record(res.usage.input_tokens, res.usage.output_tokens);
+            let (cur_in, cur_out) = budget.usage();
+            tracing::info!(
+                input = res.usage.input_tokens,
+                output = res.usage.output_tokens,
+                total = cur_in.saturating_add(cur_out),
+                budget = budget.limit,
+                stop = ?res.stop_reason,
+                "[llm] usage"
+            );
 
             // 完了条件を満たすか検証する
             // 満たしていた場合はそこで結果を返す
@@ -144,6 +167,12 @@ impl Agent {
                 }
 
                 let (input, output) = budget.usage();
+                tracing::info!(
+                    turns = turns,
+                    input = input - started.0,
+                    output = output - started.1,
+                    "[agent] done"
+                );
                 return Ok(AgentResult {
                     content: result,
                     history,
@@ -169,9 +198,12 @@ impl Agent {
 
             // ツールの実行リクエストがないかつ、 struct output を求められている場合は、respond を強制的に利用させる
             if tool_calls.is_empty() && has_respond {
+                tracing::info!("[agent] forcing respond");
                 tool_choice = ToolChoice::Specific("respond".into());
                 continue;
             }
+
+            tracing::info!(count = tool_calls.len(), "[agent] tool calls");
 
             // 実行リクエストがきたツールを全て実行
             let mut blocks: Vec<MessageBlock> = Vec::new();
@@ -182,6 +214,7 @@ impl Agent {
                 // 上限を超えた分は実行しない
                 // tool_use には必ず tool_result を返す必要があるので、拒否も結果として返し、次のターンで LLM に絞り込ませる
                 if i >= limit {
+                    tracing::warn!(name = %name, reason = "too many tool calls", "[tool] skipped");
                     blocks.push(MessageBlock::ToolResult {
                         tool_use_id: id,
                         content: Kind::TooManyToolCalls
@@ -195,9 +228,13 @@ impl Agent {
                     continue;
                 }
 
-                let tool = tool_map
-                    .get(name.as_str())
-                    .ok_or(Kind::ToolNotFound.default())?;
+                let tool = match tool_map.get(name.as_str()) {
+                    Some(tool) => tool,
+                    None => {
+                        tracing::warn!(name = %name, "[tool] not found");
+                        return Err(Kind::ToolNotFound.default());
+                    }
+                };
 
                 // Future を直接配列にいれることで id, name, input, tool の借用をなくし（ move ）、ループの外で実行可能にする
                 tasks.push(async move {
@@ -205,24 +242,36 @@ impl Agent {
                     // 時間切れはツールのエラーと同様に LLM へ差し戻し、リトライや断念を委ねる
                     let limit = tool.timeout().unwrap_or(self.default_tool_timeout);
 
+                    tracing::info!(name = %name, "[tool] start");
+                    let start = std::time::Instant::now();
+
                     let block = match tokio::time::timeout(limit, tool.execute(input)).await {
-                        Ok(Ok(v)) => MessageBlock::ToolResult {
-                            tool_use_id: id,
-                            content: v.to_string(),
-                            is_error: false,
-                        },
-                        Ok(Err(e)) => MessageBlock::ToolResult {
-                            tool_use_id: id,
-                            content: e.to_string(),
-                            is_error: true,
-                        },
-                        Err(_) => MessageBlock::ToolResult {
-                            tool_use_id: id,
-                            content: Kind::ToolTimeout
-                                .with(format!("tool `{}` timed out after {:?}", name, limit))
-                                .to_string(),
-                            is_error: true,
-                        },
+                        Ok(Ok(v)) => {
+                            tracing::info!(name = %name, dur = ?start.elapsed(), "[tool] ok");
+                            MessageBlock::ToolResult {
+                                tool_use_id: id,
+                                content: v.to_string(),
+                                is_error: false,
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            tracing::warn!(name = %name, dur = ?start.elapsed(), err = %e, "[tool] error");
+                            MessageBlock::ToolResult {
+                                tool_use_id: id,
+                                content: e.to_string(),
+                                is_error: true,
+                            }
+                        }
+                        Err(_) => {
+                            tracing::warn!(name = %name, after = ?limit, "[tool] timeout");
+                            MessageBlock::ToolResult {
+                                tool_use_id: id,
+                                content: Kind::ToolTimeout
+                                    .with(format!("tool `{}` timed out after {:?}", name, limit))
+                                    .to_string(),
+                                is_error: true,
+                            }
+                        }
                     };
 
                     Ok::<_, AgentError>(block)
