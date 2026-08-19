@@ -7,7 +7,7 @@ build:
 	cargo build --no-default-features
 
 fmt:
-	cargo fmt
+	cargo fmt --all
 
 fmt-check:
 	cargo fmt --check
