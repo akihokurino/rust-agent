@@ -31,6 +31,7 @@ impl llm::LLM for FakeLlm {
         messages: &[Message],
         _: &[&dyn tool::Tool],
         tool_choice: &ToolChoice,
+        _: Option<ReasoningEffort>,
     ) -> Result<InvokeResult, AgentError> {
         tokio::time::sleep(self.delay).await;
         self.rec.calls.fetch_add(1, Ordering::Relaxed);
@@ -114,6 +115,7 @@ fn agent_with(
     );
 
     let agent = Agent {
+        reasoning_effort: None,
         system_prompt: String::new(),
         max_turns: MAX_TURNS,
         max_tokens: 1024,

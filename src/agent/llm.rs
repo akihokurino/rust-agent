@@ -1,4 +1,5 @@
 use crate::agent::tool::Tool;
+use crate::types::ReasoningEffort;
 use crate::types::agent as types;
 use crate::types::agent::ToolChoice;
 use crate::types::errors::AgentError;
@@ -16,5 +17,6 @@ pub trait LLM: Send + Sync {
         messages: &[types::Message],
         tools: &[&dyn Tool],
         tool_choice: &ToolChoice,
+        reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<types::InvokeResult, AgentError>;
 }

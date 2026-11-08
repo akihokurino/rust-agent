@@ -3,6 +3,7 @@ mod types;
 use crate::agent;
 use crate::agent::llm::LLM;
 use crate::llm::bedrock::types::InvokeResponse;
+use crate::types::ReasoningEffort;
 use crate::types::agent::ToolChoice;
 use crate::types::errors::{AgentError, Kind};
 use crate::types::model::Model;
@@ -43,6 +44,7 @@ impl LLM for Adapter {
         messages: &[crate::types::agent::Message],
         tools: &[&dyn agent::tool::Tool],
         tool_choice: &ToolChoice,
+        _reasoning_effort: Option<ReasoningEffort>,
     ) -> Result<crate::types::agent::InvokeResult, AgentError> {
         let messages: Vec<types::Message> = messages.iter().map(Into::into).collect();
         let mut body = json!({

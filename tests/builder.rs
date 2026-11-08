@@ -1,4 +1,4 @@
-use rust_agent::{Agent, Kind, Model};
+use rust_agent::{Agent, Kind, Model, ReasoningEffort};
 use std::time::Duration;
 
 #[tokio::test]
@@ -57,6 +57,20 @@ fn model_id_is_the_bedrock_inference_profile() {
         Model::BedrockClaudeSonnet46.to_string(),
         "jp.anthropic.claude-sonnet-4-6"
     );
+}
+
+#[tokio::test]
+async fn openai_model_and_reasoning_effort_are_configured() {
+    let agent = Agent::builder()
+        .use_models(vec![Model::Gpt56Luna])
+        .reasoning_effort(ReasoningEffort::High)
+        .build()
+        .await
+        .unwrap();
+
+    assert_eq!(Model::Gpt56Luna.to_string(), "gpt-5.6-luna");
+    assert_eq!(Model::Gpt56Terra.to_string(), "gpt-5.6-terra");
+    assert_eq!(agent.reasoning_effort, Some(ReasoningEffort::High));
 }
 
 mod tools {

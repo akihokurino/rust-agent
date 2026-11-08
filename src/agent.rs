@@ -1,4 +1,6 @@
+use crate::ReasoningEffort;
 use crate::llm::bedrock;
+use crate::llm::openai;
 use crate::types::agent::AgentResult;
 use crate::types::agent::{
     InvokeResult, Message, MessageBlock, ResultBlock, StopReason, ToolChoice,
@@ -65,6 +67,7 @@ pub struct Agent {
     pub max_turns: u32,
     pub max_tokens: u32,
     pub max_total_tokens: u32,
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub default_tool_timeout: Duration,
     pub tools: Vec<Box<dyn tool::Tool>>,
     providers: HashMap<Model, Box<dyn llm::LLM>>,
@@ -135,6 +138,7 @@ impl Agent {
                     &history,
                     tool_refs,
                     &tool_choice,
+                    self.reasoning_effort,
                 )
                 .await
             {
@@ -394,6 +398,7 @@ pub struct AgentBuilder {
     max_turns: u32,
     max_tokens: u32,
     max_total_tokens: u32,
+    reasoning_effort: Option<ReasoningEffort>,
     default_tool_timeout: Duration,
     tools: Vec<Box<dyn tool::Tool>>,
     use_models: Vec<Model>,
@@ -406,6 +411,7 @@ impl Default for AgentBuilder {
             max_turns: MAX_TURNS,
             max_tokens: MAX_TOKENS,
             max_total_tokens: MAX_TOTAL_TOKENS,
+            reasoning_effort: None,
             default_tool_timeout: Duration::from_secs(60),
             tools: Vec::new(),
             use_models: vec![Model::BedrockClaudeSonnet46],
@@ -433,6 +439,11 @@ impl AgentBuilder {
     /// 1 回の run で積算してよいトークンの上限
     pub fn max_total_tokens(mut self, tokens: u32) -> Self {
         self.max_total_tokens = tokens;
+        self
+    }
+
+    pub fn reasoning_effort(mut self, effort: ReasoningEffort) -> Self {
+        self.reasoning_effort = Some(effort);
         self
     }
 
@@ -494,6 +505,9 @@ impl AgentBuilder {
                 Model::BedrockClaudeSonnet46 => {
                     providers.insert(model, Box::new(bedrock::Adapter::new().await));
                 }
+                Model::Gpt56Terra | Model::Gpt56Luna => {
+                    providers.insert(model, Box::new(openai::Adapter::new()));
+                }
             }
         }
 
@@ -502,6 +516,7 @@ impl AgentBuilder {
             max_turns: self.max_turns,
             max_tokens: self.max_tokens,
             max_total_tokens: self.max_total_tokens,
+            reasoning_effort: self.reasoning_effort,
             default_tool_timeout: self.default_tool_timeout,
             tools: self.tools,
             providers,
@@ -528,6 +543,11 @@ impl SubAgentBuilder {
     /// 1 回のモデル呼び出しが返す出力トークンの上限
     pub fn max_tokens(mut self, tokens: u32) -> Self {
         self.0 = self.0.max_tokens(tokens);
+        self
+    }
+
+    pub fn reasoning_effort(mut self, effort: ReasoningEffort) -> Self {
+        self.0 = self.0.reasoning_effort(effort);
         self
     }
 

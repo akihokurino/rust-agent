@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 default = ["builtin-tools"]
-builtin-tools = ["dep:reqwest", "tokio/net"]
+builtin-tools = ["tokio/net"]
 
 [dependencies]
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time"] }
@@ -19,7 +19,7 @@ schemars = "1.2"
 base64 = "0.22"
 futures = "0.3"
 tracing = "0.1"
-reqwest = { version = "0.13", features = ["json"], optional = true }
+reqwest = { version = "0.13", features = ["json"] }
 
 [dev-dependencies]
 # test-util は full に含まれないので明示する（時計を止めてタイムアウトを検証するため）
