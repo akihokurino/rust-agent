@@ -16,3 +16,5 @@ Bedrock model is `Model::BedrockClaudeSonnet46` (`jp.anthropic.claude-sonnet-4-6
 OpenAI models are `Model::Gpt56Terra` and `Model::Gpt56Luna`. Select them with
 `Agent::builder().use_models(vec![Model::Gpt56Luna])`; optionally set
 `.reasoning_effort(ReasoningEffort::High)`.
+
+OpenAI-only clients can omit the AWS SDK with `default-features = false, features = ["builtin-tools"]`.

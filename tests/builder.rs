@@ -1,3 +1,5 @@
+#![cfg(feature = "bedrock")]
+
 use rust_agent::{Agent, Kind, Model, ReasoningEffort};
 use std::time::Duration;
 

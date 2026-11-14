@@ -1,4 +1,5 @@
 use crate::ReasoningEffort;
+#[cfg(feature = "bedrock")]
 use crate::llm::bedrock;
 use crate::llm::openai;
 use crate::types::agent::AgentResult;
@@ -17,7 +18,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 pub mod llm;
-#[cfg(test)]
+#[cfg(all(test, feature = "bedrock"))]
 mod tests;
 pub mod tool;
 
@@ -414,7 +415,12 @@ impl Default for AgentBuilder {
             reasoning_effort: None,
             default_tool_timeout: Duration::from_secs(60),
             tools: Vec::new(),
-            use_models: vec![Model::BedrockClaudeSonnet46],
+            use_models: vec![
+                #[cfg(feature = "bedrock")]
+                Model::BedrockClaudeSonnet46,
+                #[cfg(not(feature = "bedrock"))]
+                Model::Gpt56Luna,
+            ],
         }
     }
 }
@@ -502,6 +508,7 @@ impl AgentBuilder {
         let mut providers: HashMap<Model, Box<dyn llm::LLM>> = HashMap::new();
         for model in self.use_models {
             match model {
+                #[cfg(feature = "bedrock")]
                 Model::BedrockClaudeSonnet46 => {
                     providers.insert(model, Box::new(bedrock::Adapter::new().await));
                 }

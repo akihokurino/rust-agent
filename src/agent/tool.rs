@@ -1,6 +1,6 @@
 #[cfg(feature = "builtin-tools")]
 pub mod fetch_url;
-#[cfg(test)]
+#[cfg(all(test, feature = "bedrock"))]
 mod tests;
 #[cfg(feature = "builtin-tools")]
 pub mod web_search;
