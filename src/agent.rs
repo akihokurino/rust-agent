@@ -4,7 +4,7 @@ use crate::llm::bedrock;
 use crate::llm::openai;
 use crate::types::agent::AgentResult;
 use crate::types::agent::{
-    InvokeResult, Message, MessageBlock, ResultBlock, StopReason, ToolChoice,
+    InvokeResult, Message, MessageBlock, ResultBlock, StopReason, ToolChoice, Usage,
 };
 use crate::types::errors::AgentError;
 use crate::types::errors::Kind::ValidationException;
@@ -160,6 +160,22 @@ impl Agent {
                 stop = ?res.stop_reason,
                 "[llm] usage"
             );
+
+            let stop_error = match res.stop_reason {
+                StopReason::Refusal => Some(Kind::ModelRefusal),
+                StopReason::MaxTokens => Some(Kind::MaxOutputTokensExceeded),
+                StopReason::ModelContextWindowExceeded => Some(Kind::ModelContextWindowExceeded),
+                StopReason::EndTurn | StopReason::StopSequence | StopReason::ToolUse => None,
+            };
+            if let Some(kind) = stop_error {
+                return Err(AgentError {
+                    usage: Some(Usage {
+                        input_tokens: cur_in - started.0,
+                        output_tokens: cur_out - started.1,
+                    }),
+                    ..kind.default()
+                });
+            }
 
             // 完了条件を満たすか検証する
             // 満たしていた場合はそこで結果を返す

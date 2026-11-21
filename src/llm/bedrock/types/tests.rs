@@ -119,6 +119,11 @@ fn every_stop_reason_is_understood() {
         ("tool_use", types::StopReason::ToolUse),
         ("max_tokens", types::StopReason::MaxTokens),
         ("stop_sequence", types::StopReason::StopSequence),
+        ("refusal", types::StopReason::Refusal),
+        (
+            "model_context_window_exceeded",
+            types::StopReason::ModelContextWindowExceeded,
+        ),
     ] {
         let parsed: StopReason = serde_json::from_value(json!(raw)).unwrap();
         let got: types::StopReason = parsed.into();
@@ -128,6 +133,22 @@ fn every_stop_reason_is_understood() {
             "{raw}"
         );
     }
+}
+
+#[test]
+fn refusal_preserves_reported_usage() {
+    let response: InvokeResponse = serde_json::from_value(json!({
+        "content": [],
+        "stop_reason": "refusal",
+        "stop_details": null,
+        "usage": { "input_tokens": 106, "output_tokens": 1 }
+    }))
+    .unwrap();
+    let result: types::InvokeResult = response.into();
+
+    assert!(matches!(result.stop_reason, types::StopReason::Refusal));
+    assert_eq!(result.usage.input_tokens, 106);
+    assert_eq!(result.usage.output_tokens, 1);
 }
 
 #[test]

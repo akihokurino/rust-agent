@@ -1,3 +1,4 @@
+use crate::types::agent::Usage;
 use derive_more::Display;
 use std::fmt::{Display, Formatter};
 use std::panic::Location;
@@ -13,6 +14,9 @@ pub enum Kind {
     TooManyToolCalls,
     MaxTurnsExceeded,
     TokenBudgetExceeded,
+    ModelRefusal,
+    MaxOutputTokensExceeded,
+    ModelContextWindowExceeded,
     UnknownException,
 }
 impl Kind {
@@ -27,6 +31,9 @@ impl Kind {
             Kind::TooManyToolCalls => "too many tools were requested in a single turn",
             Kind::MaxTurnsExceeded => "the maximum number of turns has been exceeded",
             Kind::TokenBudgetExceeded => "the token budget for this run has been exhausted",
+            Kind::ModelRefusal => "the model refused to complete the response",
+            Kind::MaxOutputTokensExceeded => "the model reached the output token limit",
+            Kind::ModelContextWindowExceeded => "the model reached the context window limit",
             Kind::UnknownException => "an unexpected error occurred",
         };
 
@@ -34,6 +41,7 @@ impl Kind {
             kind: self,
             msg: Some(msg.to_string()),
             src: None,
+            usage: None,
             location: Location::caller(),
         }
     }
@@ -44,6 +52,7 @@ impl Kind {
             kind: self,
             msg: Some(msg.into()),
             src: None,
+            usage: None,
             location: Location::caller(),
         }
     }
@@ -59,6 +68,7 @@ impl Kind {
             kind: self,
             msg: Some(v.into()),
             src: None,
+            usage: None,
             location,
         }
     }
@@ -69,6 +79,7 @@ impl Kind {
             kind: self,
             msg: None,
             src: Some(Arc::from(src)),
+            usage: None,
             location: Location::caller(),
         }
     }
@@ -84,6 +95,7 @@ impl Kind {
             kind: self,
             msg: None,
             src: Some(Arc::from(v)),
+            usage: None,
             location,
         }
     }
@@ -99,6 +111,8 @@ pub struct AgentError {
     pub kind: Kind,
     pub msg: Option<String>,
     pub src: Option<Arc<dyn std::error::Error + Send + Sync>>,
+    /// Token usage reported before the run stopped, when available.
+    pub usage: Option<Usage>,
     pub location: &'static Location<'static>,
 }
 impl AgentError {
@@ -151,6 +165,7 @@ impl From<Kind> for AgentError {
             kind,
             msg: None,
             src: None,
+            usage: None,
             location: Location::caller(),
         }
     }
@@ -162,6 +177,7 @@ impl From<String> for AgentError {
             kind: Kind::UnknownException,
             msg: Some(value),
             src: None,
+            usage: None,
             location: Location::caller(),
         }
     }

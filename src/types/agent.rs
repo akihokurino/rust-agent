@@ -127,9 +127,11 @@ pub enum StopReason {
     ToolUse,
     MaxTokens,
     StopSequence,
+    Refusal,
+    ModelContextWindowExceeded,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,

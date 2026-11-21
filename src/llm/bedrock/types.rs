@@ -143,6 +143,8 @@ pub enum StopReason {
     ToolUse,
     MaxTokens,
     StopSequence,
+    Refusal,
+    ModelContextWindowExceeded,
 }
 
 #[derive(Debug, Deserialize)]
@@ -189,6 +191,8 @@ impl From<StopReason> for types::StopReason {
             StopReason::ToolUse => types::StopReason::ToolUse,
             StopReason::MaxTokens => types::StopReason::MaxTokens,
             StopReason::StopSequence => types::StopReason::StopSequence,
+            StopReason::Refusal => types::StopReason::Refusal,
+            StopReason::ModelContextWindowExceeded => types::StopReason::ModelContextWindowExceeded,
         }
     }
 }

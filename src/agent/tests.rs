@@ -139,6 +139,39 @@ fn go() -> Vec<Input> {
     vec![Input::Text("go".into())]
 }
 
+#[tokio::test]
+async fn refused_and_truncated_responses_return_usage_without_retrying() {
+    for (stop_reason, kind) in [
+        (StopReason::Refusal, Kind::ModelRefusal),
+        (StopReason::MaxTokens, Kind::MaxOutputTokensExceeded),
+        (
+            StopReason::ModelContextWindowExceeded,
+            Kind::ModelContextWindowExceeded,
+        ),
+    ] {
+        let mut response = ends("partial response", (100, 20));
+        response.stop_reason = stop_reason;
+        let (agent, rec) = agent_with(vec![response], vec![]);
+
+        let err = agent.run(&MODEL, go(), None).await.unwrap_err();
+        assert_eq!(err.kind, kind);
+        let usage = err.usage.unwrap();
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 20);
+        assert_eq!(rec.calls.load(Ordering::Relaxed), 1);
+
+        let err = agent
+            .run_typed::<Value>(&MODEL, go(), None)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind, kind);
+        let usage = err.usage.unwrap();
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 20);
+        assert_eq!(rec.calls.load(Ordering::Relaxed), 2);
+    }
+}
+
 struct SlowTool {
     name: &'static str,
     delay: Duration,
