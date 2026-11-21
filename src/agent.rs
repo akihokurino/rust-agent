@@ -509,7 +509,7 @@ impl AgentBuilder {
         for model in self.use_models {
             match model {
                 #[cfg(feature = "bedrock")]
-                Model::BedrockClaudeSonnet46 => {
+                Model::BedrockClaudeSonnet46 | Model::BedrockClaudeSonnet55 => {
                     providers.insert(model, Box::new(bedrock::Adapter::new().await));
                 }
                 Model::Gpt56Terra | Model::Gpt56Luna => {

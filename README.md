@@ -12,7 +12,8 @@ bound how far the loop can run — nothing else. There is no streaming or sessio
 - `OPENAI_API_KEY` when using an OpenAI model
 
 The Bedrock client is constructed internally and cannot be swapped from outside. Region is `ap-northeast-1`, and the
-Bedrock model is `Model::BedrockClaudeSonnet46` (`jp.anthropic.claude-sonnet-4-6`).
+Bedrock models are `Model::BedrockClaudeSonnet46` (`jp.anthropic.claude-sonnet-4-6`) and
+`Model::BedrockClaudeSonnet55` (`global.anthropic.claude-sonnet-5-5`).
 OpenAI models are `Model::Gpt56Terra` and `Model::Gpt56Luna`. Select them with
 `Agent::builder().use_models(vec![Model::Gpt56Luna])`; optionally set
 `.reasoning_effort(ReasoningEffort::High)`.

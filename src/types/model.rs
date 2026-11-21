@@ -5,6 +5,9 @@ pub enum Model {
     #[cfg(feature = "bedrock")]
     #[display("jp.anthropic.claude-sonnet-4-6")]
     BedrockClaudeSonnet46,
+    #[cfg(feature = "bedrock")]
+    #[display("global.anthropic.claude-sonnet-5-5")]
+    BedrockClaudeSonnet55,
     #[display("gpt-5.6-terra")]
     Gpt56Terra,
     #[display("gpt-5.6-luna")]
