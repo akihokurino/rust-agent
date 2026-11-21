@@ -47,6 +47,15 @@ pub enum MessageBlock {
     Text {
         text: String,
     },
+    /// An Anthropic thinking block. Replay the text and signature unchanged.
+    Thinking {
+        thinking: String,
+        signature: String,
+    },
+    /// An opaque Anthropic thinking block. Replay the data unchanged.
+    RedactedThinking {
+        data: String,
+    },
     ToolUse {
         id: String,
         name: String,
@@ -65,6 +74,14 @@ impl From<ResultBlock> for MessageBlock {
     fn from(value: ResultBlock) -> Self {
         match value {
             ResultBlock::Text { text } => MessageBlock::Text { text },
+            ResultBlock::Thinking {
+                thinking,
+                signature,
+            } => MessageBlock::Thinking {
+                thinking,
+                signature,
+            },
+            ResultBlock::RedactedThinking { data } => MessageBlock::RedactedThinking { data },
             ResultBlock::ToolUse { id, name, input } => MessageBlock::ToolUse { id, name, input },
         }
     }
@@ -89,6 +106,13 @@ pub struct InvokeResult {
 pub enum ResultBlock {
     Text {
         text: String,
+    },
+    Thinking {
+        thinking: String,
+        signature: String,
+    },
+    RedactedThinking {
+        data: String,
     },
     ToolUse {
         id: String,

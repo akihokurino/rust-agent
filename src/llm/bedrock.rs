@@ -9,7 +9,6 @@ use crate::types::errors::{AgentError, Kind};
 use crate::types::model::Model;
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
-use aws_config::retry::RetryConfig;
 use aws_sdk_bedrockruntime::Client;
 use aws_sdk_bedrockruntime::config::http::HttpResponse;
 use aws_sdk_bedrockruntime::error::SdkError;
@@ -54,10 +53,6 @@ impl LLM for Adapter {
             "max_tokens": max_tokens,
             "messages": messages,
         });
-        let sonnet_text_reply = matches!(model, Model::BedrockClaudeSonnet55) && tools.is_empty();
-        if sonnet_text_reply {
-            body["thinking"] = json!({ "type": "between_tools" });
-        }
         if !tools.is_empty() {
             let specs: Vec<Value> = tools.iter().map(|t| t.spec()).collect();
             body["tools"] = json!(specs);
@@ -69,28 +64,17 @@ impl LLM for Adapter {
             }
         }
 
-        let request = self
+        let resp = self
             .client
             .invoke_model()
             .model_id(model.to_string())
             .content_type("application/json")
             .accept("application/json")
             .body(Blob::new(serde_json::to_vec(&body)?))
-            .customize();
-        let request = if sonnet_text_reply {
-            request.config_override(
-                aws_sdk_bedrockruntime::config::Builder::new()
-                    .retry_config(RetryConfig::disabled()),
-            )
-        } else {
-            request
-        };
-        let resp = request.send().await?;
+            .send()
+            .await?;
 
         let out: InvokeResponse = serde_json::from_slice(resp.body().as_ref())?;
-        if sonnet_text_reply && matches!(&out.stop_reason, types::StopReason::MaxTokens) {
-            return Err(Kind::ValidationException.with("Bedrock text response was truncated"));
-        }
         Ok(out.into())
     }
 }

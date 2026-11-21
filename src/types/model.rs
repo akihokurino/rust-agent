@@ -13,3 +13,13 @@ pub enum Model {
     #[display("gpt-5.6-luna")]
     Gpt56Luna,
 }
+
+impl Model {
+    pub(crate) fn supports_forced_tool_choice(&self) -> bool {
+        match self {
+            #[cfg(feature = "bedrock")]
+            Self::BedrockClaudeSonnet55 => false,
+            _ => true,
+        }
+    }
+}

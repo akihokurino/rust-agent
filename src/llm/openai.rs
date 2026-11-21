@@ -121,6 +121,7 @@ fn input_items(messages: &[Message]) -> Vec<Value> {
                 MessageBlock::ToolResult { tool_use_id, content, .. } => tail.push(json!({
                     "type": "function_call_output", "call_id": tool_use_id, "output": content,
                 })),
+                MessageBlock::Thinking { .. } | MessageBlock::RedactedThinking { .. } => {}
             }
         }
         if !content.is_empty() {

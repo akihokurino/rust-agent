@@ -201,10 +201,16 @@ impl Agent {
             // res から必要な情報を取得後に、消費する
             history.push(res.into());
 
-            // ツールの実行リクエストがないかつ、 struct output を求められている場合は、respond を強制的に利用させる
+            // 構造化出力を求めている場合、respond を呼び出すよう促す
             if tool_calls.is_empty() && has_respond {
-                tracing::info!("[agent] forcing respond");
-                tool_choice = ToolChoice::Specific("respond".into());
+                if model.supports_forced_tool_choice() {
+                    tracing::info!("[agent] forcing respond");
+                    tool_choice = ToolChoice::Specific("respond".into());
+                } else {
+                    history.push(Message::user(vec![MessageBlock::Text {
+                        text: "最終的な回答は respond ツールを呼び出して返してください。".into(),
+                    }]));
+                }
                 continue;
             }
 

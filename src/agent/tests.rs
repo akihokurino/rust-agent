@@ -103,10 +103,18 @@ fn agent_with(
     script: Vec<InvokeResult>,
     tools: Vec<Box<dyn tool::Tool>>,
 ) -> (Agent, Arc<Recorder>) {
+    agent_with_model(MODEL, script, tools)
+}
+
+fn agent_with_model(
+    model: Model,
+    script: Vec<InvokeResult>,
+    tools: Vec<Box<dyn tool::Tool>>,
+) -> (Agent, Arc<Recorder>) {
     let rec = Arc::new(Recorder::default());
     let mut providers: HashMap<Model, Box<dyn llm::LLM>> = HashMap::new();
     providers.insert(
-        MODEL,
+        model,
         Box::new(FakeLlm {
             script_repeating_last: Mutex::new(script.into()),
             rec: rec.clone(),
@@ -405,6 +413,47 @@ async fn a_plain_text_reply_makes_the_next_turn_name_respond() {
 
     assert_eq!(res.content.pref, "東京");
     assert_eq!(*rec.tool_choices.lock().unwrap(), ["auto", "respond"]);
+}
+
+#[tokio::test]
+async fn sonnet55_prompts_for_respond_without_forcing_tool_choice() {
+    #[derive(serde::Deserialize, schemars::JsonSchema)]
+    struct Answer {
+        pref: String,
+    }
+
+    const SONNET55: Model = Model::BedrockClaudeSonnet55;
+    let mut first = ends("東京です", (1, 1));
+    first.content.insert(
+        0,
+        ResultBlock::Thinking {
+            thinking: String::new(),
+            signature: "signature".into(),
+        },
+    );
+    let (agent, rec) = agent_with_model(
+        SONNET55,
+        vec![first, responds(json!({ "pref": "東京" }))],
+        vec![],
+    );
+
+    let res = agent
+        .run_typed::<Answer>(&SONNET55, go(), None)
+        .await
+        .unwrap();
+    assert_eq!(res.content.pref, "東京");
+    assert_eq!(*rec.tool_choices.lock().unwrap(), ["auto", "auto"]);
+
+    let history = rec.last_history.lock().unwrap();
+    assert!(matches!(
+        &history[1].content[0],
+        MessageBlock::Thinking { thinking, signature } if thinking.is_empty() && signature == "signature"
+    ));
+    assert_eq!(history[2].role, Role::User);
+    assert!(matches!(
+        history[2].content.as_slice(),
+        [MessageBlock::Text { text }] if text.contains("respond")
+    ));
 }
 
 #[tokio::test]

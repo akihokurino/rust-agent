@@ -131,21 +131,26 @@ fn every_stop_reason_is_understood() {
 }
 
 #[test]
-fn response_keeps_text_and_usage_when_thinking_is_present() {
+fn assistant_history_replays_thinking_and_tool_use_unchanged() {
+    let content = json!([
+        { "type": "thinking", "thinking": "", "signature": "empty-signature" },
+        { "type": "thinking", "thinking": "summary", "signature": "summary-signature" },
+        { "type": "redacted_thinking", "data": "opaque" },
+        { "type": "text", "text": "調べます" },
+        { "type": "tool_use", "id": "tu_1", "name": "lookup", "input": { "x": 1 } },
+    ]);
     let parsed: InvokeResponse = serde_json::from_value(json!({
-        "content": [
-            { "type": "thinking", "thinking": "", "signature": "signature" },
-            { "type": "redacted_thinking", "data": "opaque" },
-            { "type": "text", "text": "こんにちは" },
-        ],
-        "stop_reason": "end_turn",
+        "content": content,
+        "stop_reason": "tool_use",
         "usage": { "input_tokens": 100, "output_tokens": 20 },
     }))
     .unwrap();
     let result: types::InvokeResult = parsed.into();
-    assert!(matches!(
-        result.content.as_slice(),
-        [types::ResultBlock::Text { text }] if text == "こんにちは"
-    ));
     assert_eq!(result.usage.output_tokens, 20);
+
+    let history: types::Message = result.into();
+    assert_eq!(
+        serde_json::to_value(Message::from(&history)).unwrap(),
+        json!({ "role": "assistant", "content": content }),
+    );
 }

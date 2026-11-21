@@ -24,6 +24,13 @@ pub enum MessageBlock<'a> {
     Text {
         text: &'a str,
     },
+    Thinking {
+        thinking: &'a str,
+        signature: &'a str,
+    },
+    RedactedThinking {
+        data: &'a str,
+    },
     ToolUse {
         id: &'a str,
         name: &'a str,
@@ -69,6 +76,16 @@ impl<'a> From<&'a types::MessageBlock> for MessageBlock<'a> {
     fn from(b: &'a types::MessageBlock) -> Self {
         match b {
             types::MessageBlock::Text { text } => MessageBlock::Text { text },
+            types::MessageBlock::Thinking {
+                thinking,
+                signature,
+            } => MessageBlock::Thinking {
+                thinking,
+                signature,
+            },
+            types::MessageBlock::RedactedThinking { data } => {
+                MessageBlock::RedactedThinking { data }
+            }
             types::MessageBlock::ToolUse { id, name, input } => {
                 MessageBlock::ToolUse { id, name, input }
             }
@@ -110,8 +127,13 @@ pub enum ContentBlock {
         name: String,
         input: serde_json::Value,
     },
-    Thinking,
-    RedactedThinking,
+    Thinking {
+        thinking: String,
+        signature: String,
+    },
+    RedactedThinking {
+        data: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -132,25 +154,30 @@ pub struct Usage {
 impl From<InvokeResponse> for types::InvokeResult {
     fn from(r: InvokeResponse) -> Self {
         types::InvokeResult {
-            content: r
-                .content
-                .into_iter()
-                .filter_map(ContentBlock::into_result)
-                .collect(),
+            content: r.content.into_iter().map(Into::into).collect(),
             stop_reason: r.stop_reason.into(),
             usage: r.usage.into(),
         }
     }
 }
 
-impl ContentBlock {
-    fn into_result(self) -> Option<types::ResultBlock> {
-        match self {
-            Self::Text { text } => Some(types::ResultBlock::Text { text }),
-            Self::ToolUse { id, name, input } => {
-                Some(types::ResultBlock::ToolUse { id, name, input })
+impl From<ContentBlock> for types::ResultBlock {
+    fn from(b: ContentBlock) -> Self {
+        match b {
+            ContentBlock::Text { text } => types::ResultBlock::Text { text },
+            ContentBlock::ToolUse { id, name, input } => {
+                types::ResultBlock::ToolUse { id, name, input }
             }
-            Self::Thinking | Self::RedactedThinking => None,
+            ContentBlock::Thinking {
+                thinking,
+                signature,
+            } => types::ResultBlock::Thinking {
+                thinking,
+                signature,
+            },
+            ContentBlock::RedactedThinking { data } => {
+                types::ResultBlock::RedactedThinking { data }
+            }
         }
     }
 }
