@@ -110,6 +110,8 @@ pub enum ContentBlock {
         name: String,
         input: serde_json::Value,
     },
+    Thinking,
+    RedactedThinking,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,20 +132,25 @@ pub struct Usage {
 impl From<InvokeResponse> for types::InvokeResult {
     fn from(r: InvokeResponse) -> Self {
         types::InvokeResult {
-            content: r.content.into_iter().map(Into::into).collect(),
+            content: r
+                .content
+                .into_iter()
+                .filter_map(ContentBlock::into_result)
+                .collect(),
             stop_reason: r.stop_reason.into(),
             usage: r.usage.into(),
         }
     }
 }
 
-impl From<ContentBlock> for types::ResultBlock {
-    fn from(b: ContentBlock) -> Self {
-        match b {
-            ContentBlock::Text { text } => types::ResultBlock::Text { text },
-            ContentBlock::ToolUse { id, name, input } => {
-                types::ResultBlock::ToolUse { id, name, input }
+impl ContentBlock {
+    fn into_result(self) -> Option<types::ResultBlock> {
+        match self {
+            Self::Text { text } => Some(types::ResultBlock::Text { text }),
+            Self::ToolUse { id, name, input } => {
+                Some(types::ResultBlock::ToolUse { id, name, input })
             }
+            Self::Thinking | Self::RedactedThinking => None,
         }
     }
 }

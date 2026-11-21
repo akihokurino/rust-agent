@@ -129,3 +129,23 @@ fn every_stop_reason_is_understood() {
         );
     }
 }
+
+#[test]
+fn response_keeps_text_and_usage_when_thinking_is_present() {
+    let parsed: InvokeResponse = serde_json::from_value(json!({
+        "content": [
+            { "type": "thinking", "thinking": "", "signature": "signature" },
+            { "type": "redacted_thinking", "data": "opaque" },
+            { "type": "text", "text": "こんにちは" },
+        ],
+        "stop_reason": "end_turn",
+        "usage": { "input_tokens": 100, "output_tokens": 20 },
+    }))
+    .unwrap();
+    let result: types::InvokeResult = parsed.into();
+    assert!(matches!(
+        result.content.as_slice(),
+        [types::ResultBlock::Text { text }] if text == "こんにちは"
+    ));
+    assert_eq!(result.usage.output_tokens, 20);
+}
