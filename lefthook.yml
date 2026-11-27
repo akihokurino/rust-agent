@@ -1,0 +1,14 @@
+lefthook: mise exec -- lefthook
+
+pre-commit:
+  jobs:
+    - name: fmt
+      glob: "*.rs"
+      run: mise exec -- make fmt
+      stage_fixed: true
+    - name: build
+      run: mise exec -- make build
+    - name: clippy
+      run: mise exec -- make lint
+    - name: ast-grep
+      run: mise exec -- ast-grep scan --config sgconfig.yml

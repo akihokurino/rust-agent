@@ -1,0 +1,11 @@
+id: no-debug-macro
+language: Rust
+severity: error
+message: Use tracing for diagnostics in library code.
+files:
+  - src/**/*.rs
+rule:
+  kind: macro_invocation
+  has:
+    field: macro
+    regex: '^(?:::)?(?:std::)?dbg$'

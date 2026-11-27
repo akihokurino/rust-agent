@@ -8,6 +8,7 @@ use async_trait::async_trait;
 
 #[async_trait]
 #[allow(clippy::upper_case_acronyms)]
+#[allow(clippy::too_many_arguments)]
 pub trait LLM: Send + Sync {
     async fn invoke(
         &self,

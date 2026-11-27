@@ -11,6 +11,14 @@ bound how far the loop can run — nothing else. There is no streaming or sessio
 - AWS credentials with `bedrock:InvokeModel` permission
 - `OPENAI_API_KEY` when using an OpenAI model
 
+Install the development tools and Git hook from the repository root.
+
+```sh
+mise install
+mise exec -- lefthook install
+mise exec -- make check
+```
+
 The Bedrock client is constructed internally and cannot be swapped from outside. Region is `ap-northeast-1`, and the
 Bedrock models are `Model::BedrockClaudeSonnet46` (`jp.anthropic.claude-sonnet-4-6`) and
 `Model::BedrockClaudeSonnet55` (`global.anthropic.claude-sonnet-5-5`).

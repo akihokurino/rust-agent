@@ -143,12 +143,12 @@ fn from_response(response: &Value) -> Result<InvokeResult, AgentError> {
             Some("message") => {
                 if let Some(parts) = item["content"].as_array() {
                     for part in parts {
-                        if part["type"] == "output_text" {
-                            if let Some(text) = part["text"].as_str() {
-                                content.push(ResultBlock::Text {
-                                    text: text.to_owned(),
-                                });
-                            }
+                        if part["type"] == "output_text"
+                            && let Some(text) = part["text"].as_str()
+                        {
+                            content.push(ResultBlock::Text {
+                                text: text.to_owned(),
+                            });
                         }
                     }
                 }
