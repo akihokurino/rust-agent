@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-const MODEL: Model = Model::BedrockClaudeSonnet46;
+const MODEL: Model = Model::Gpt56Luna;
 
 #[derive(Default)]
 struct Recorder {
@@ -137,6 +137,16 @@ fn agent_with_model(
 
 fn go() -> Vec<Input> {
     vec![Input::Text("go".into())]
+}
+
+#[test]
+fn default_model_matches_the_enabled_features() {
+    #[cfg(feature = "bedrock")]
+    let model = Model::BedrockClaudeSonnet46;
+    #[cfg(not(feature = "bedrock"))]
+    let model = Model::Gpt56Luna;
+
+    assert_eq!(AgentBuilder::default().use_models, [model]);
 }
 
 #[tokio::test]
@@ -448,6 +458,7 @@ async fn a_plain_text_reply_makes_the_next_turn_name_respond() {
     assert_eq!(*rec.tool_choices.lock().unwrap(), ["auto", "respond"]);
 }
 
+#[cfg(feature = "bedrock")]
 #[tokio::test]
 async fn sonnet55_prompts_for_respond_without_forcing_tool_choice() {
     #[derive(serde::Deserialize, schemars::JsonSchema)]

@@ -17,7 +17,8 @@ lint:
 	cargo clippy --all-targets --no-default-features -- -D warnings
 
 test:
-	cargo test
+	cargo test --workspace --locked
+	cargo test --workspace --locked --no-default-features
 
 test-net:
 	cargo test -- --ignored

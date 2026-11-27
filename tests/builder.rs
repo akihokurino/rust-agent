@@ -1,11 +1,13 @@
-#![cfg(feature = "bedrock")]
-
 use rust_agent::{Agent, Kind, Model, ReasoningEffort};
 use std::time::Duration;
 
 #[tokio::test]
 async fn defaults() {
-    let a = Agent::builder().build().await.unwrap();
+    let a = Agent::builder()
+        .use_models(vec![Model::Gpt56Luna])
+        .build()
+        .await
+        .unwrap();
 
     assert_eq!(a.system_prompt, "");
     assert_eq!(a.max_tokens, 1024);
@@ -21,7 +23,7 @@ async fn overrides_are_applied() {
         .max_tokens(4096)
         .max_total_tokens(50_000)
         .default_tool_timeout(Duration::from_secs(5))
-        .use_models(vec![Model::BedrockClaudeSonnet46])
+        .use_models(vec![Model::Gpt56Luna])
         .build()
         .await
         .unwrap();
@@ -43,6 +45,7 @@ async fn building_without_a_model_is_rejected() {
 #[tokio::test]
 async fn tools_keep_their_registration_order() {
     let a = Agent::builder()
+        .use_models(vec![Model::Gpt56Luna])
         .add_tool(Box::new(tools::Named("a")))
         .add_tool(Box::new(tools::Named("b")))
         .build()
@@ -53,6 +56,7 @@ async fn tools_keep_their_registration_order() {
     assert_eq!(names, ["a", "b"]);
 }
 
+#[cfg(feature = "bedrock")]
 #[test]
 fn model_id_is_the_bedrock_inference_profile() {
     assert_eq!(

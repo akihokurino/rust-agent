@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod tests;
+
 use crate::agent;
 use crate::agent::llm::LLM;
 use crate::types::ReasoningEffort;
@@ -194,49 +197,4 @@ fn from_response(response: &Value) -> Result<InvokeResult, AgentError> {
             output_tokens: tokens("output_tokens"),
         },
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::types::agent::Role;
-
-    #[test]
-    fn maps_messages_and_response() {
-        let messages = vec![
-            Message {
-                role: Role::Assistant,
-                content: vec![
-                    MessageBlock::Text {
-                        text: "hello".into(),
-                    },
-                    MessageBlock::ToolUse {
-                        id: "call_1".into(),
-                        name: "lookup".into(),
-                        input: json!({"x": 1}),
-                    },
-                ],
-            },
-            Message::user(vec![MessageBlock::ToolResult {
-                tool_use_id: "call_1".into(),
-                content: "ok".into(),
-                is_error: false,
-            }]),
-        ];
-        let items = input_items(&messages);
-        assert_eq!(items[0]["content"][0]["text"], "hello");
-        assert_eq!(items[1]["arguments"], "{\"x\":1}");
-        assert_eq!(items[2]["call_id"], "call_1");
-
-        let result = from_response(&json!({
-            "output": [
-                {"type": "message", "content": [{"type": "output_text", "text": "done"}]},
-                {"type": "function_call", "call_id": "call_2", "name": "lookup", "arguments": "{\"x\":2}"}
-            ],
-            "usage": {"input_tokens": 10, "output_tokens": 4}
-        })).unwrap();
-        assert!(matches!(result.stop_reason, StopReason::ToolUse));
-        assert_eq!(result.content.len(), 2);
-        assert_eq!(result.usage.input_tokens, 10);
-    }
 }

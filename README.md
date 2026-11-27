@@ -30,3 +30,8 @@ OpenAI models are `Model::Gpt56Terra` and `Model::Gpt56Luna`. Select them with
 `.reasoning_effort(ReasoningEffort::High)`.
 
 OpenAI-only clients can omit the AWS SDK with `default-features = false, features = ["builtin-tools"]`.
+
+## Tests
+
+- `mise run test` runs the workspace tests with the default features and with default features disabled.
+- `mise run test:integration` runs the public Agent API against a local Bedrock HTTP fixture with test credentials.

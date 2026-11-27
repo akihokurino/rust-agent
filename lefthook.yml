@@ -8,6 +8,8 @@ pre-commit:
       stage_fixed: true
     - name: build
       run: mise exec -- make build
+    - name: test
+      run: mise exec -- make test
     - name: clippy
       run: mise exec -- make lint
     - name: ast-grep

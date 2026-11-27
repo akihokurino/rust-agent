@@ -2,3 +2,9 @@
 rust = { version = "1.100.0", profile = "minimal", components = ["rustfmt", "clippy"] }
 lefthook = "2.2.2"
 ast-grep = "0.51.3"
+
+[tasks.test]
+run = "make test"
+
+[tasks."test:integration"]
+run = "cargo test --workspace --locked --features integration-tests --test agent"

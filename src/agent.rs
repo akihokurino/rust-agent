@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 pub mod llm;
-#[cfg(all(test, feature = "bedrock"))]
+#[cfg(test)]
 mod tests;
 pub mod tool;
 

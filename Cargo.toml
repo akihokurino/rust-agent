@@ -7,6 +7,7 @@ edition = "2024"
 default = ["builtin-tools", "bedrock"]
 builtin-tools = ["tokio/net"]
 bedrock = ["dep:aws-config", "dep:aws-sdk-bedrockruntime"]
+integration-tests = ["bedrock"]
 
 [dependencies]
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time"] }
@@ -36,3 +37,7 @@ required-features = ["builtin-tools", "bedrock"]
 [[test]]
 name = "tools"
 required-features = ["builtin-tools"]
+
+[[test]]
+name = "agent"
+required-features = ["integration-tests"]
