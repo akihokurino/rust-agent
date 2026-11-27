@@ -1,3 +1,3 @@
-# rust-agent
+## 作業を終える前に
 
-Use the Lefthook pre-commit checks defined in `lefthook.yml`.
+- 実装が終わったら、差分を `/review` でレビューし、指摘を直してから完了報告する。実装の途中では回さない。
